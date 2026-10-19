@@ -1,0 +1,16 @@
+[package]
+name = "hangar_zero"
+version = "0.1.0"
+edition = "2024"
+description = "Hangar Zero - a cockpit-only mech survival prototype built with Bevy + egui"
+license = "MIT"
+
+[dependencies]
+bevy = { version = "0.20", default-features = false, features = ["2d", "png"] }
+bevy_egui = "0.43"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
