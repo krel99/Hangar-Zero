@@ -123,7 +123,7 @@ pub fn cockpit_ui(
     let radar = Rect::from_min_size(left.min, Vec2::new(left.width(), radar_h));
     let log = Rect::from_min_max(Pos2::new(left.min.x, radar.max.y + 8.0), left.max);
 
-    top_bar(&mut root, top, &mech, &mut mission, &scene);
+    top_bar(&mut root, top, &art, &mech, &mut mission, &scene);
     radar_panel(&mut root, radar, &mut mech, &campaign, &scene);
     log_panel(&mut root, log, &art, &radio, mission.running());
     feed_panel(&mut root, feed, &art, &mut mech, &fx, &mut cmds, &campaign, &scene, &mut st);
@@ -217,7 +217,7 @@ fn handle_keys(keys: &ButtonInput<KeyCode>, mech: &mut Mech, mission: &mut Missi
 // Top bar
 // --------------------------------------------------------------------------------------
 
-fn top_bar(ui: &mut Ui, rect: Rect, mech: &Mech, mission: &mut Mission, scene: &Scene) {
+fn top_bar(ui: &mut Ui, rect: Rect, art: &Art, mech: &Mech, mission: &mut Mission, scene: &Scene) {
     let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, PANEL);
     p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, EDGE_LO));
@@ -229,7 +229,8 @@ fn top_bar(ui: &mut Ui, rect: Rect, mech: &Mech, mission: &mut Mission, scene: &
         let x = logo.max.x - 40.0 + i as f32 * 7.0;
         p.line_segment([Pos2::new(x, logo.max.y), Pos2::new(x + 12.0, logo.min.y)], Stroke::new(3.0, Color32::from_rgb(30, 24, 16)));
     }
-    text(&p, logo.left_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, "HANGAR ZERO", pix(16.0), Color32::from_rgb(20, 16, 10));
+    art.sprites.crest.paint(&p, logo.left_top() + Vec2::new(6.0, 3.0), 2.0, 0.0, Some(Color32::from_rgb(40, 32, 24)), false);
+    text(&p, logo.left_center() + Vec2::new(34.0, 0.0), Align2::LEFT_CENTER, "HANGAR ZERO", pix(16.0), Color32::from_rgb(20, 16, 10));
     text(&p, logo.right_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, format!("WF-7 BASTION // OP-{:02}", mission.number), pix(10.0), AMBER);
 
     // Mission clock
@@ -353,6 +354,20 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
         }
         p.line_segment([c - Vec2::new(rad, 0.0), c + Vec2::new(rad, 0.0)], Stroke::new(1.0, GREEN_DIM));
         p.line_segment([c - Vec2::new(0.0, rad), c + Vec2::new(0.0, rad)], Stroke::new(1.0, GREEN_DIM));
+    }
+    // Ground returns: the city itself, as faint static clutter that the sweep lights up.
+    for i in 0..90 {
+        let h = hash2(i, 0, 61);
+        let a = (h % 6283) as f32 / 1000.0;
+        let d = 120.0 + ((h >> 13) % 700) as f32;
+        if d > st.radar_range {
+            continue;
+        }
+        let since = (mech.sweep - a).rem_euclid(TAU);
+        let glow = 0.12 + 0.25 * (1.0 - since / TAU);
+        let pt = polar(c, k, a, d);
+        let w = 2.0 + ((h >> 24) % 3) as f32;
+        p.rect_filled(Rect::from_min_size(Pos2::new(pt.x.round(), pt.y.round()), Vec2::new(w, 2.0)), 0.0, GREEN.gamma_multiply(glow));
     }
     // Detection & ID rings
     pixel_ring(&p, c, (st.radar_range * k).min(rad), GREEN.gamma_multiply(0.7), true);
@@ -487,8 +502,16 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
     if mech.shield > 1.0 {
         p.circle_stroke(c, 12.0, Stroke::new(2.0, Color32::from_rgb(110, 150, 255).gamma_multiply(0.3 + 0.7 * shield_frac)));
     }
-    p.rect_filled(Rect::from_center_size(c, Vec2::new(6.0, 8.0)), 0.0, AMBER);
-    p.rect_filled(Rect::from_center_size(c + Vec2::new(0.0, -5.0), Vec2::new(2.0, 3.0)), 0.0, AMBER);
+    // Bastion from above: torso, shoulders, the rail arm and the mast.
+    const SELF_ICON: [&str; 9] = ["....x....", "....x....", ".xx.x.xx.", "xxxxxxxxx", "xxxxxxxxx", "xxxxxxxxx", ".xx...xx.", "....xxxx.", "......xx."];
+    for (y, row) in SELF_ICON.iter().enumerate() {
+        for (x, ch) in row.chars().enumerate() {
+            if ch == 'x' {
+                let min = c + Vec2::new((x as f32 - 4.5) * 2.0, (y as f32 - 4.5) * 2.0);
+                p.rect_filled(Rect::from_min_size(Pos2::new(min.x.round(), min.y.round()), Vec2::splat(2.0)), 0.0, AMBER);
+            }
+        }
+    }
 
     text(&p, rr.left_bottom() + Vec2::new(4.0, -4.0), Align2::LEFT_BOTTOM, format!("DET {:.0}m", st.radar_range), mono(18.0), GREEN);
     if square {
@@ -607,10 +630,25 @@ fn feed_panel(
     }
 }
 
+/// Soft edge darkening plus the pixel bezel brackets of the monitor.
 fn vignette(p: &egui::Painter, fr: Rect) {
-    for i in 0..6 {
-        let a = 26 - i * 4;
+    for i in 0..4 {
+        let a = 20 - i * 5;
         p.rect_stroke(fr.shrink(i as f32 * 3.0), CornerRadius::ZERO, Stroke::new(3.0, Color32::from_black_alpha(a as u8 * 4)), StrokeKind::Inside);
+    }
+    let l = (fr.width() * 0.06).clamp(14.0, 34.0);
+    let w = 4.0;
+    let bez = Color32::from_rgb(70, 74, 82);
+    let hi = Color32::from_rgb(120, 126, 134);
+    for (corner, dx, dy) in [(fr.left_top(), 1.0, 1.0), (fr.right_top(), -1.0, 1.0), (fr.left_bottom(), 1.0, -1.0), (fr.right_bottom(), -1.0, -1.0)] {
+        let h = Rect::from_two_pos(corner, corner + Vec2::new(l * dx, w * dy));
+        let v = Rect::from_two_pos(corner, corner + Vec2::new(w * dx, l * dy));
+        p.rect_filled(h, 0.0, bez);
+        p.rect_filled(v, 0.0, bez);
+        p.rect_filled(Rect::from_two_pos(corner, corner + Vec2::new(l * dx, 1.0 * dy)), 0.0, hi);
+        p.rect_filled(Rect::from_two_pos(corner, corner + Vec2::new(1.0 * dx, l * dy)), 0.0, hi);
+        // A screw in each bracket
+        p.rect_filled(Rect::from_center_size(corner + Vec2::new(8.0 * dx, 8.0 * dy), Vec2::splat(3.0)), 0.0, Color32::from_rgb(30, 32, 36));
     }
 }
 
@@ -626,15 +664,26 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
     // Dead camera: nothing but noise.
     if !mech.camera_ok(cam) {
         p.rect_filled(fr, 0.0, Color32::from_rgb(8, 8, 10));
-        for i in 0..1400 {
+        for i in 0..1600 {
             let h = hash2(i, frame_i, 17 + cam as u32);
             let x = (h % FEED_W as u32) as f32;
             let y = ((h >> 9) % FEED_H as u32) as f32;
             let v = ((h >> 20) % 70) as u8 + 10;
-            p.rect_filled(Rect::from_min_size(px(x, y), Vec2::new(s * 2.0, s)), 0.0, Color32::from_rgb(v, v, v));
+            // A little chroma bleed in the snow.
+            let c = match (h >> 27) % 9 {
+                0 => Color32::from_rgb(v + 30, v, v),
+                1 => Color32::from_rgb(v, v, v + 40),
+                _ => Color32::from_rgb(v, v, v),
+            };
+            p.rect_filled(Rect::from_min_size(px(x, y), Vec2::new(s * 2.0, s)), 0.0, c);
         }
-        let band = ((frame_i / 2) % FEED_H as i32) as f32;
-        p.rect_filled(Rect::from_min_size(px(0.0, band), Vec2::new(fr.width(), 8.0 * s)), 0.0, Color32::from_white_alpha(14));
+        // Rolling bars and a tear line.
+        for b in 0..3 {
+            let band = ((frame_i / 2 + b * 70) % FEED_H as i32) as f32;
+            p.rect_filled(Rect::from_min_size(px(0.0, band), Vec2::new(fr.width(), 10.0 * s)), 0.0, Color32::from_white_alpha(10 + b as u8 * 4));
+        }
+        let tear = ((frame_i * 3) % FEED_H as i32) as f32;
+        p.rect_filled(Rect::from_min_size(px(0.0, tear), Vec2::new(fr.width(), s)), 0.0, Color32::from_white_alpha(60));
         if (scene.t * 1.5).fract() < 0.7 {
             text(p, fr.center(), Align2::CENTER_CENTER, "NO SIGNAL", pix(16.0 * s.min(2.0) / 1.3), RED);
         }
@@ -667,6 +716,36 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
         let rel = angle_diff(angle, bearing);
         (rel.abs() < fov * 0.6).then(|| FEED_W / 2.0 + rel / (fov / 2.0) * (FEED_W / 2.0))
     };
+    // Searchlights sweeping the smoke from two districts, and aviation lights on the towers.
+    for (i, (brg, phase)) in [(0.7f32, 0.0f64), (3.6, 2.1), (5.2, 4.4)].iter().enumerate() {
+        if let Some(x) = to_x(*brg) {
+            let sweep = ((scene.t * 0.25 + phase).sin() as f32) * 0.9;
+            let base = px(x, art::HORIZON as f32 - 2.0);
+            let tip = base + Vec2::new(sweep * 90.0, -110.0) * s;
+            let a = (18.0 + 10.0 * ((scene.t * 0.9 + i as f64).sin() as f32)) as u8;
+            p.add(egui::Shape::convex_polygon(
+                vec![base + Vec2::new(-2.0 * s, 0.0), base + Vec2::new(2.0 * s, 0.0), tip + Vec2::new(18.0 * s, 0.0), tip - Vec2::new(18.0 * s, 0.0)],
+                Color32::from_rgba_unmultiplied(230, 220, 190, a),
+                Stroke::NONE,
+            ));
+        }
+    }
+    for (i, (brg, h)) in [(0.3f32, 54.0f32), (1.9, 40.0), (2.8, 62.0), (4.1, 36.0), (4.9, 48.0), (5.9, 58.0)].iter().enumerate() {
+        if let Some(x) = to_x(*brg)
+            && (scene.t * 0.8 + i as f64 * 0.37).fract() < 0.12
+        {
+            p.rect_filled(Rect::from_min_size(px(x.floor(), art::HORIZON as f32 - h), Vec2::splat(2.0 * s)), 0.0, Color32::from_rgb(255, 70, 50));
+        }
+    }
+    // Low fog drifting across the street.
+    for i in 0..70 {
+        let h = hash2(i, 5, 41);
+        let w = 6.0 + (h % 20) as f32;
+        let x = (((h >> 8) % 320) as f32 + scene.t as f32 * (2.0 + (h % 3) as f32) - bearing.to_degrees() * 3.55).rem_euclid(FEED_W + 40.0) - 20.0;
+        let y = art::HORIZON as f32 + 4.0 + ((h >> 16) % 30) as f32;
+        let a = 14 + ((h >> 20) % 18) as u8;
+        p.rect_filled(Rect::from_min_size(px(x, y), Vec2::new(w * s, 2.0 * s)), 0.0, Color32::from_rgba_unmultiplied(150, 120, 130, a));
+    }
     let ground_y = |dist: f32| art::HORIZON as f32 + (1.0 - (dist / 1100.0).clamp(0.0, 1.0)).powf(1.6) * 72.0;
 
     // Enemies, far to near
@@ -674,18 +753,35 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
     list.sort_by(|a, b| b.1.dist.total_cmp(&a.1.dist));
     for (ent, e) in list {
         let Some(x) = to_x(e.angle) else { continue };
+        let moving = e.state == EnemyState::Approach || e.kind == EnemyKind::Scout;
+        let walk_frame = ((scene.t * 6.0 + e.serial as f64) as i32) % 2 == 1;
         let sprite: &Sprite = match e.kind {
-            EnemyKind::Scout => &art.sprites.scout,
+            EnemyKind::Scout => if moving && walk_frame { &art.sprites.scout_walk } else { &art.sprites.scout },
             EnemyKind::Artillery => &art.sprites.artillery,
             EnemyKind::Carrier => &art.sprites.carrier,
         };
         let k = if e.dist < 230.0 { 3.0 } else if e.dist < 520.0 { 2.0 } else if e.dist < 800.0 { 1.5 } else { 1.0 };
         let gy = ground_y(e.dist);
-        // Walk bob
-        let bob = if e.state == EnemyState::Approach || e.kind == EnemyKind::Scout { ((scene.t * 8.0 + e.serial as f64).sin() as f32 * 0.6).round() } else { 0.0 };
-        let min = px(x - sprite.w as f32 * k / 2.0, gy - sprite.h as f32 * k + bob);
-        let haze = if e.dist > 600.0 { Some(Color32::from_rgb(170, 130, 140)) } else { None };
-        sprite.paint(p, Pos2::new(min.x.round(), min.y.round()), k * s, (e.hit_flash * 2.0).min(0.9), haze, e.orbit < 0.0 && e.kind == EnemyKind::Scout);
+        // Walk bob, carrier hover, artillery recoil right after it fires
+        let bob = match e.kind {
+            EnemyKind::Carrier => ((scene.t * 1.6 + e.serial as f64).sin() as f32 * 2.0).round(),
+            _ if moving => ((scene.t * 8.0 + e.serial as f64).sin() as f32 * 0.6).round(),
+            _ => 0.0,
+        };
+        let recoil = if e.kind == EnemyKind::Artillery && e.reveal > 2.6 { ((e.reveal - 2.6) * 8.0).round() } else { 0.0 };
+        let facing_left = e.orbit < 0.0 && e.kind == EnemyKind::Scout;
+        let min = px(x - sprite.w as f32 * k / 2.0 + if facing_left { -recoil } else { recoil }, gy - sprite.h as f32 * k + bob);
+        // Ground shadow
+        let sw = sprite.w as f32 * k * s * 0.9;
+        let shadow = Rect::from_center_size(Pos2::new(px(x, gy).x, px(x, gy).y - 1.0 * s), Vec2::new(sw, 3.0 * s * k.max(1.0) * 0.6));
+        p.rect_filled(shadow, 0.0, Color32::from_black_alpha(if e.kind == EnemyKind::Carrier { 60 } else { 90 }));
+        // Distance fog: blend toward the sky as contacts get far
+        let fog = ((e.dist - 300.0) / 700.0).clamp(0.0, 0.7);
+        let haze = (fog > 0.0).then(|| {
+            let f = 255.0 - fog * (255.0 - 150.0);
+            Color32::from_rgb(f as u8, (255.0 - fog * (255.0 - 120.0)) as u8, (255.0 - fog * (255.0 - 135.0)) as u8)
+        });
+        sprite.paint(p, Pos2::new(min.x.round(), min.y.round()), k * s, (e.hit_flash * 2.0).min(0.9), haze, facing_left);
         if Some(*ent) == mech.target {
             let w = sprite.w as f32 * k * s;
             let h = sprite.h as f32 * k * s;
@@ -748,6 +844,26 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
                     p.line_segment([rail_origin, t], Stroke::new(6.0 * s * a, CYAN.gamma_multiply(a)));
                     p.line_segment([rail_origin, t], Stroke::new(2.0 * s * a, Color32::WHITE.gamma_multiply(a)));
                 }
+                if rail_at.is_some() {
+                    // Muzzle flash, then a drift of ionised smoke off the rails.
+                    if life < 0.3 {
+                        let fl = 1.0 - life / 0.3;
+                        let r = (6.0 + 10.0 * fl) * s;
+                        p.add(egui::Shape::convex_polygon(
+                            vec![rail_origin + Vec2::new(-r, 0.0), rail_origin + Vec2::new(0.0, -r * 1.6), rail_origin + Vec2::new(r, 0.0), rail_origin + Vec2::new(0.0, r * 0.4)],
+                            Color32::from_rgba_unmultiplied(200, 240, 255, (180.0 * fl) as u8),
+                            Stroke::NONE,
+                        ));
+                        p.circle_filled(rail_origin, r * 0.45, Color32::from_rgba_unmultiplied(255, 255, 255, (220.0 * fl) as u8));
+                    }
+                    for i in 0..8 {
+                        let h = hash2(i, 0, 57);
+                        let dx = ((h % 100) as f32 / 50.0 - 1.0) * 6.0 * s * (0.3 + life);
+                        let dy = -(4.0 + life * 30.0 + ((h >> 8) % 100) as f32 / 10.0) * s;
+                        let a = ((1.0 - life) * 120.0) as u8;
+                        p.rect_filled(Rect::from_center_size(rail_origin + Vec2::new(dx, dy), Vec2::splat(s * (1.0 + life * 2.5))), 0.0, Color32::from_rgba_unmultiplied(170, 200, 210, a));
+                    }
+                }
             }
             FxKind::Tracer => {
                 if let Some(t) = target {
@@ -765,7 +881,17 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
             }
             FxKind::ShellImpact => {
                 if let Some(x) = to_x(f.angle) {
-                    boom(p, px(x, FEED_H - 12.0), s * 4.0, life, 77);
+                    let base = px(x, FEED_H - 12.0);
+                    boom(p, base, s * 4.0, life, 77);
+                    // A column of dust and dirt thrown up, widening as it rises.
+                    for i in 0..18 {
+                        let h = hash2(i, 77, 13);
+                        let rise = life * (30.0 + ((h >> 8) % 40) as f32);
+                        let dx = ((h % 100) as f32 / 50.0 - 1.0) * (4.0 + rise * 0.5) * s;
+                        let a = ((1.0 - life) * 150.0) as u8;
+                        let g = 90 + ((h >> 16) % 50) as u8;
+                        p.rect_filled(Rect::from_center_size(base + Vec2::new(dx, -rise * s), Vec2::splat(s * (2.0 + life * 3.0))), 0.0, Color32::from_rgba_unmultiplied(g, g - 20, g - 35, a));
+                    }
                 }
             }
             FxKind::Ecm => {
@@ -863,6 +989,28 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
         let y = ((hash2(frame_i, 1, 2) % FEED_H as u32) as f32).round();
         p.rect_filled(Rect::from_min_size(px(0.0, y), Vec2::new(fr.width(), 6.0 * s)), 0.0, Color32::from_white_alpha(40));
     }
+    // Dirt on this lens, fixed per camera; cracks spread as the optics fail.
+    for i in 0..14 {
+        let h = hash2(i, cam as i32, 83);
+        let x = (h % FEED_W as u32) as f32;
+        let y = ((h >> 9) % FEED_H as u32) as f32;
+        let a = 18 + ((h >> 20) % 30) as u8;
+        p.rect_filled(Rect::from_min_size(px(x, y), Vec2::splat(s * (1.0 + (h % 3) as f32))), 0.0, Color32::from_rgba_unmultiplied(40, 30, 30, a));
+    }
+    if cam_hp < 0.5 {
+        let n = ((0.5 - cam_hp) * 16.0) as i32 + 2;
+        let origin = px(((hash2(cam as i32, 1, 91) % FEED_W as u32) as f32), ((hash2(cam as i32, 2, 91) % FEED_H as u32) as f32));
+        for i in 0..n {
+            let h = hash2(i, cam as i32, 97);
+            let a = (h % 628) as f32 / 100.0;
+            let len = (20.0 + ((h >> 10) % 60) as f32) * s;
+            let mid = origin + Vec2::new(a.cos(), a.sin()) * len * 0.5;
+            let end = origin + Vec2::new(a.cos(), a.sin()) * len;
+            let kink = Vec2::new(-a.sin(), a.cos()) * 4.0 * s;
+            p.line_segment([origin, mid + kink], Stroke::new(1.0, Color32::from_rgba_unmultiplied(220, 230, 240, 120)));
+            p.line_segment([mid + kink, end], Stroke::new(1.0, Color32::from_rgba_unmultiplied(220, 230, 240, 80)));
+        }
+    }
     if mech.heat > 85.0 {
         let a = ((mech.heat - 85.0) / 45.0 * 90.0) as u8;
         p.rect_filled(fr, 0.0, Color32::from_rgba_unmultiplied(255, 60, 20, a));
@@ -871,6 +1019,28 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
 
 /// Chunky pixel explosion.
 fn boom(p: &egui::Painter, c: Pos2, s: f32, life: f32, seed: u32) {
+    // Smoke rises and spreads as the fireball dies.
+    if life > 0.25 {
+        let sl = (life - 0.25) / 0.75;
+        for i in 0..10 {
+            let h = hash2(i, seed as i32, 21);
+            let dx = ((h % 100) as f32 / 50.0 - 1.0) * (3.0 + sl * 8.0) * s;
+            let dy = -(((h >> 8) % 100) as f32 / 100.0 + sl * 2.2) * 6.0 * s;
+            let g = 70 + ((h >> 16) % 40) as u8;
+            let a = ((1.0 - sl) * 170.0) as u8;
+            p.rect_filled(Rect::from_center_size(c + Vec2::new(dx, dy), Vec2::splat(s * (1.5 + sl * 2.0))), 0.0, Color32::from_rgba_unmultiplied(g, g - 10, g - 14, a));
+        }
+    }
+    // Debris chunks on ballistic arcs.
+    for i in 0..8 {
+        let h = hash2(i, seed as i32, 33);
+        let vx = ((h % 100) as f32 / 50.0 - 1.0) * 14.0;
+        let vy = -(6.0 + ((h >> 8) % 100) as f32 / 100.0 * 12.0);
+        let t = life * 1.6;
+        let pt = c + Vec2::new(vx * t, vy * t + 24.0 * t * t) * s;
+        let col = if (h >> 16) % 3 == 0 { Color32::from_rgb(255, 170, 60) } else { Color32::from_rgb(70, 62, 60) };
+        p.rect_filled(Rect::from_center_size(pt, Vec2::splat(s * 1.2)), 0.0, col.gamma_multiply(1.0 - life * 0.6));
+    }
     let r = (2.0 + life * 6.0) * s;
     let cols = [Color32::WHITE, YELLOW, Color32::from_rgb(255, 140, 50), Color32::from_rgb(180, 60, 40), Color32::from_rgb(60, 50, 50)];
     let stage = ((life * 4.0) as usize).min(4);
@@ -947,6 +1117,33 @@ fn interior_view(ui: &mut Ui, p: &egui::Painter, fr: Rect, s: f32, art: &Art, me
         // Pipes
         p.rect_filled(Rect::from_min_size(r.min + Vec2::new(0.0, 3.0 * s), Vec2::new(r.width(), s)), 0.0, Color32::from_rgb(64, 54, 44));
         p.rect_filled(Rect::from_min_size(r.min + Vec2::new(0.0, r.height() - 4.0 * s), Vec2::new(r.width(), 2.0 * s)), 0.0, Color32::from_rgb(28, 26, 30));
+        // Ceiling conduit with brackets and a flickering lamp
+        let cy = r.min.y + 2.0 * s;
+        p.rect_filled(Rect::from_min_size(Pos2::new(r.min.x + 2.0 * s, cy), Vec2::new(r.width() - 4.0 * s, s)), 0.0, Color32::from_rgb(80, 66, 50));
+        let mut bx = r.min.x + 6.0 * s;
+        while bx < r.max.x - 4.0 * s {
+            p.rect_filled(Rect::from_min_size(Pos2::new(bx, cy - s), Vec2::new(s, 3.0 * s)), 0.0, Color32::from_rgb(52, 48, 50));
+            bx += 14.0 * s;
+        }
+        let flicker = f > 0.35 || hash2((t * 17.0) as i32, sec.idx() as i32, 8) % 5 != 0;
+        let lamp = Pos2::new(r.center().x, r.min.y + 4.0 * s);
+        if flicker {
+            p.rect_filled(Rect::from_center_size(lamp, Vec2::new(4.0 * s, s)), 0.0, Color32::from_rgb(255, 236, 190));
+            p.rect_filled(Rect::from_center_size(lamp + Vec2::new(0.0, 4.0 * s), Vec2::new(16.0 * s, 7.0 * s)), 0.0, Color32::from_rgba_unmultiplied(255, 230, 170, 16));
+        } else {
+            p.rect_filled(Rect::from_center_size(lamp, Vec2::new(4.0 * s, s)), 0.0, Color32::from_rgb(70, 64, 54));
+        }
+        // Steam leaking from damaged plumbing
+        if f < 0.7 && *sec != Section::Uplink {
+            for i in 0..6 {
+                let h = hash2(i, sec.idx() as i32, 19);
+                let phase = ((t * 1.3 + (h % 100) as f64 / 25.0).fract()) as f32;
+                let x = r.min.x + (6 + (h >> 8) % 12) as f32 * s + phase * 6.0 * s;
+                let y = r.max.y - 6.0 * s - phase * 12.0 * s;
+                let a = ((1.0 - phase) * 110.0 * (1.0 - f)) as u8;
+                p.rect_filled(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s * (1.0 + phase * 2.0))), 0.0, Color32::from_rgba_unmultiplied(220, 225, 230, a));
+            }
+        }
         // Status light
         let blink = f < 0.35 && (t * 4.0).fract() < 0.5;
         p.rect_filled(Rect::from_min_size(r.right_top() + Vec2::new(-5.0 * s, 2.0 * s), Vec2::splat(2.0 * s)), 0.0, if blink { Color32::BLACK } else { hc });
@@ -1108,6 +1305,15 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
         }
     }
 
+    // Drop shadow under the silhouette.
+    for y in 0..art::HULL_H as i32 {
+        for x in 0..art::HULL_W as i32 {
+            if at(x, y) != 254 && at(x + 1, y + 1) == 254 {
+                p.rect_filled(cell(x + 1, y + 1), 0.0, Color32::from_black_alpha(120));
+            }
+        }
+    }
+    let scan_y = ((t * 0.35).fract() as f32 * (art::HULL_H as f32 + 6.0)) as i32 - 3;
     let mut centroid = [(0.0f32, 0.0f32, 0u32); 10];
     for y in 0..art::HULL_H as i32 {
         for x in 0..art::HULL_W as i32 {
@@ -1172,7 +1378,21 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
             } else {
                 col = col.gamma_multiply(0.78);
             }
+            // Diagnostic scan line sweeping down the frame.
+            if y == scan_y {
+                col = col.gamma_multiply(1.6);
+            }
             p.rect_filled(r, 0.0, col);
+        }
+    }
+    if let Some(h) = hovered {
+        for y in 0..art::HULL_H as i32 {
+            for x in 0..art::HULL_W as i32 {
+                let v = at(x, y);
+                if v == h as u8 && (at(x - 1, y) != v || at(x + 1, y) != v || at(x, y - 1) != v || at(x, y + 1) != v) {
+                    p.rect_stroke(cell(x, y), CornerRadius::ZERO, Stroke::new(1.0, AMBER), StrokeKind::Inside);
+                }
+            }
         }
     }
     let cen = |sec: Section| {
@@ -1232,9 +1452,14 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
     // --- Core gauges --------------------------------------------------------------------------
     let gz = Rect::from_min_max(Pos2::new(inner.min.x, bg.max.y + 26.0), inner.max);
     let pp = ui.painter_at(gz);
-    let therm = Rect::from_min_max(Pos2::new(gz.min.x + 14.0, gz.min.y + 18.0), Pos2::new(gz.min.x + 60.0, gz.max.y - 46.0));
+    let therm = Rect::from_min_max(Pos2::new(gz.min.x + 14.0, gz.min.y + 18.0), Pos2::new(gz.min.x + 60.0, gz.max.y - 56.0));
     text(&pp, Pos2::new(therm.center().x, gz.min.y), Align2::CENTER_TOP, "HEAT", pix(10.0), RED);
     pp.rect_filled(therm, 0.0, EDGE_LO);
+    // The bulb at the foot of the thermometer, glowing with the core.
+    let bulb = Pos2::new(therm.center().x, therm.max.y + 2.0);
+    pp.circle_filled(bulb, 10.0, EDGE_LO);
+    let bulb_col = if mech.heat >= 100.0 { RED } else if mech.heat >= 80.0 { Color32::from_rgb(255, 120, 40) } else if mech.heat >= 50.0 { AMBER } else { GREEN };
+    pp.circle_filled(bulb, 7.0, bulb_col.gamma_multiply(0.4 + 0.6 * (mech.heat / HEAT_MAX).min(1.0)));
     let hy = |v: f32| therm.max.y - (v / HEAT_MAX) * therm.height();
     pp.rect_filled(Rect::from_min_max(Pos2::new(therm.min.x, hy(HEAT_MAX)), Pos2::new(therm.max.x, hy(HEAT_CRIT))), 0.0, Color32::from_rgb(60, 14, 12));
     let segs = 26;
@@ -1249,8 +1474,8 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
         text(&pp, Pos2::new(therm.max.x + 8.0, hy(mark)), Align2::LEFT_CENTER, format!("{mark:.0}"), mono(15.0), DIM);
     }
     let net = st.heat_in - st.heat_out;
-    text(&pp, Pos2::new(therm.center().x, therm.max.y + 4.0), Align2::CENTER_TOP, format!("{:.0}", mech.heat), mono(28.0), if mech.heat >= 80.0 { RED } else { TEXT });
-    text(&pp, Pos2::new(therm.center().x + 2.0, therm.max.y + 26.0), Align2::CENTER_TOP, format!("{:+.1}/s", net), mono(16.0), if net > 0.0 { AMBER } else { GREEN });
+    text(&pp, Pos2::new(therm.center().x, therm.max.y + 14.0), Align2::CENTER_TOP, format!("{:.0}", mech.heat), mono(28.0), if mech.heat >= 80.0 { RED } else { TEXT });
+    text(&pp, Pos2::new(therm.center().x + 2.0, therm.max.y + 36.0), Align2::CENTER_TOP, format!("{:+.1}/s", net), mono(16.0), if net > 0.0 { AMBER } else { GREEN });
     // Shield column
     let sh = Rect::from_min_max(Pos2::new(gz.max.x - 56.0, therm.min.y), Pos2::new(gz.max.x - 14.0, therm.max.y));
     text(&pp, Pos2::new(sh.center().x, gz.min.y), Align2::CENTER_TOP, "SHIELD", pix(10.0), Color32::from_rgb(110, 150, 255));
@@ -1394,13 +1619,13 @@ fn hotbar_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut 
         p.rect_stroke(r, CornerRadius::ZERO, Stroke::new(if slot.lit { 2.0 } else { 1.0 }, border), StrokeKind::Inside);
         // Miniature
         let icon = &art.sprites.hotbar[i];
-        let k = ((sh - 44.0) / 16.0).floor().clamp(2.0, 4.0);
-        let imin = Pos2::new(r.center().x - 8.0 * k, r.min.y + 6.0);
+        let k = ((sh - 30.0) / 19.0).floor().clamp(2.0, 3.0);
+        let imin = Pos2::new(r.center().x - 12.0 * k, r.min.y + 4.0);
         let tint = if !slot.enabled && !slot.lit { Some(Color32::from_rgb(110, 110, 120)) } else { None };
         let flash = if i == 0 && mech.shake > 0.5 { 0.6 } else { 0.0 };
         icon.paint(&p, imin, k, flash, tint, false);
         // Charge bar
-        let bar = Rect::from_min_size(Pos2::new(r.min.x + 8.0, imin.y + 16.0 * k + 4.0), Vec2::new(sw - 16.0, 8.0));
+        let bar = Rect::from_min_size(Pos2::new(r.min.x + 8.0, imin.y + 19.0 * k + 4.0), Vec2::new(sw - 16.0, 8.0));
         seg_bar(&p, bar, slot.charge, 10, slot.color);
         text(&p, Pos2::new(r.min.x + 8.0, r.max.y - 5.0), Align2::LEFT_BOTTOM, slot.name, pix(10.0), if slot.enabled || slot.lit { slot.color } else { DIM });
         text(&p, Pos2::new(r.max.x - 8.0, r.max.y - 5.0), Align2::RIGHT_BOTTOM, &slot.status, mono(16.0), slot.status_col);
@@ -1456,6 +1681,20 @@ fn log_panel(ui: &mut Ui, rect: Rect, art: &Art, radio: &Radio, animate: bool) {
         let fr = Rect::from_min_size(head.min + Vec2::new(4.0, 4.0), Vec2::splat(48.0));
         p.rect_filled(fr, 0.0, col.gamma_multiply(0.15));
         sprite.paint(&p, fr.min, 2.0, 0.0, None, false);
+        // Mouth flaps while the line is fresh.
+        let talking = radio.time - m.time < 3.0;
+        if talking && ((radio.time * 9.0) as i32) % 2 == 0 {
+            let mouth = match m.voice {
+                Voice::Pilot => Some((Vec2::new(10.0, 19.0), Vec2::new(4.0, 2.0), Color32::from_rgb(120, 40, 40))),
+                Voice::Chief => Some((Vec2::new(10.0, 17.0), Vec2::new(4.0, 2.0), Color32::from_rgb(60, 20, 20))),
+                Voice::Control => Some((Vec2::new(10.0, 14.0), Vec2::new(3.0, 2.0), Color32::from_rgb(120, 40, 40))),
+                Voice::Enemy => Some((Vec2::new(5.0, 12.0), Vec2::new(14.0, 2.0), RED.gamma_multiply(0.7))),
+                Voice::System => None,
+            };
+            if let Some((off, size, c)) = mouth {
+                p.rect_filled(Rect::from_min_size(fr.min + off * 2.0, size * 2.0), 0.0, c);
+            }
+        }
         scanlines(&p, fr, 50);
         text(&p, Pos2::new(fr.max.x + 10.0, fr.min.y + 10.0), Align2::LEFT_CENTER, name, pix(10.0), col);
         if radio.time - m.time < 3.0 {
@@ -1560,6 +1799,46 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
         }
         text(&p, Pos2::new(r.center().x, r.min.y + 10.0), Align2::CENTER_TOP, title, pix(30.0), col);
         text(&p, Pos2::new(r.center().x, r.min.y + 64.0), Align2::CENTER_TOP, sub, mono(24.0), TEXT);
+        // Vignette: Bastion's silhouette, lit by what happened to her.
+        {
+            let vs = 2.0;
+            let vr = Rect::from_min_size(Pos2::new(r.min.x + 10.0, r.min.y + 110.0), Vec2::new(art::HULL_W as f32 * vs, art::HULL_H as f32 * vs));
+            p.rect_filled(vr.expand(6.0), 0.0, Color32::from_rgb(8, 10, 14));
+            for i in 0..40 {
+                let h = hash2(i, 3, 71);
+                p.rect_filled(Rect::from_min_size(vr.min + Vec2::new((h % 80) as f32, ((h >> 8) % 30) as f32), Vec2::splat(1.0)), 0.0, Color32::from_rgb(120, 110, 130));
+            }
+            for y in 0..art::HULL_H {
+                for x in 0..art::HULL_W {
+                    let v = art.hull[y * art::HULL_W + x];
+                    if v == 254 {
+                        continue;
+                    }
+                    let d = art.hull_detail[y * art::HULL_W + x];
+                    let base = match outcome {
+                        Outcome::Victory => Color32::from_rgb(70, 92, 84),
+                        _ => Color32::from_rgb(60, 40, 40),
+                    };
+                    let mut c = if d != art::HD_NONE { art::hull_shade(base, d, scene.t) } else { base };
+                    if outcome != Outcome::Victory && v == Section::Reactor as u8 {
+                        let pulse = ((scene.t * 5.0).sin() * 0.5 + 0.5) as f32;
+                        c = Color32::from_rgb(255, (120.0 + 100.0 * pulse) as u8, 40);
+                    }
+                    if outcome == Outcome::Victory && v == Section::Uplink as u8 && (scene.t * 2.0).fract() < 0.5 {
+                        c = CYAN;
+                    }
+                    p.rect_filled(Rect::from_min_size(vr.min + Vec2::new(x as f32 * vs, y as f32 * vs), Vec2::splat(vs)), 0.0, c);
+                }
+            }
+            if outcome != Outcome::Victory {
+                let life = ((scene.t * 0.7).fract()) as f32;
+                boom(&p, vr.center() - Vec2::new(0.0, 10.0), 3.0, life, 5);
+            }
+            if outcome == Outcome::Ejected {
+                let f = ((scene.t * 0.5).fract()) as f32;
+                art.sprites.hotbar[5].paint(&p, vr.center_top() + Vec2::new(10.0 + f * 40.0, -20.0 - f * 60.0), 1.0, 0.0, None, false);
+            }
+        }
         let stats = [
             ("MISSION TIME", fmt_clock(mission.time)),
             ("CONTACTS DESTROYED", format!("{}", mech.kills)),
@@ -1568,8 +1847,8 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
         ];
         let mut y = r.min.y + 120.0;
         for (k, v) in stats {
-            text(&p, Pos2::new(r.min.x + 120.0, y), Align2::LEFT_TOP, k, mono(24.0), DIM);
-            text(&p, Pos2::new(r.max.x - 120.0, y), Align2::RIGHT_TOP, v, mono(24.0), TEXT);
+            text(&p, Pos2::new(r.min.x + 130.0, y), Align2::LEFT_TOP, k, mono(24.0), DIM);
+            text(&p, Pos2::new(r.max.x - 60.0, y), Align2::RIGHT_TOP, v, mono(24.0), TEXT);
             y += 28.0;
         }
         let br = Rect::from_min_size(Pos2::new(r.center().x - 160.0, r.max.y - 46.0), Vec2::new(320.0, 46.0));

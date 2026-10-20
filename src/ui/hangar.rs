@@ -52,13 +52,44 @@ pub fn hangar_ui(
     );
     paint_cradle(&p, mech_rect, cradle_y, r.max.y, s);
     paint_mech(&p, mech_rect, ms, &art.hull, &art.hull_detail, &campaign, t);
-    // Welding sparks
-    for i in 0..10 {
-        let h = hash2(i, (t * 14.0) as i32, 3);
-        if h.is_multiple_of(3) {
-            let x = mech_rect.min.x + (h % mech_rect.width() as u32) as f32;
-            let y = mech_rect.min.y + ((h >> 8) % mech_rect.height() as u32) as f32;
-            p.rect_filled(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s * 0.6)), 0.0, YELLOW);
+    // Rotating hazard beacon on the gantry: an orange cone sweeping the hangar.
+    {
+        let beacon = Pos2::new(r.min.x + 118.0 * s / (s.max(1.0)) * 1.0 + 0.0, bg.min.y + 46.0 * s);
+        let beacon = Pos2::new(bg.min.x + 118.0 * s, beacon.y);
+        let ang = (t * 1.4).rem_euclid(std::f64::consts::TAU) as f32;
+        let dir = Vec2::new(ang.cos(), ang.sin() * 0.35);
+        let tip = beacon + dir * 260.0;
+        let a = ((ang.sin() * 0.5 + 0.5) * 28.0) as u8 + 6;
+        p.add(egui::Shape::convex_polygon(
+            vec![beacon, tip + Vec2::new(-dir.y, dir.x) * 40.0, tip - Vec2::new(-dir.y, dir.x) * 40.0],
+            Color32::from_rgba_unmultiplied(255, 140, 40, a),
+            Stroke::NONE,
+        ));
+        p.rect_filled(Rect::from_center_size(beacon, Vec2::splat(s * 1.5)), 0.0, Color32::from_rgb(255, 160, 60));
+    }
+    // Dust motes drifting through the skylight shaft.
+    for i in 0..60 {
+        let h = hash2(i, 2, 53);
+        let fx = ((h % 100) as f32 / 100.0 - 0.5) * 2.0;
+        let y = bg.min.y + (((h >> 8) % 1000) as f32 / 1000.0 * 180.0 + t as f32 * 2.5 * (1.0 + (h % 3) as f32 * 0.3)) % (170.0 * s);
+        let x = bg.min.x + (200.0 + (y / s - 14.0) * 0.32) * s + fx * (36.0 + y / s * 0.2) * s + ((t * 0.8 + i as f64).sin() as f32) * 3.0 * s;
+        p.rect_filled(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s * 0.5)), 0.0, Color32::from_rgba_unmultiplied(230, 225, 210, 70));
+    }
+    // Chief Oda, welding at the left foot.
+    {
+        let k = 3.0;
+        let foot = Pos2::new(mech_rect.min.x - 14.0 * k, cradle_y - 16.0 * k);
+        art.sprites.pilot.paint(&p, foot, k, 0.0, Some(Color32::from_rgb(170, 170, 190)), false);
+        let torch = foot + Vec2::new(9.0 * k, 8.0 * k);
+        if ((t * 23.0) as i32) % 3 != 0 {
+            p.rect_filled(Rect::from_center_size(torch, Vec2::splat(k * 1.5)), 0.0, Color32::WHITE);
+            p.rect_filled(Rect::from_center_size(torch, Vec2::splat(k * 5.0)), 0.0, Color32::from_rgba_unmultiplied(150, 200, 255, 50));
+            for i in 0..8 {
+                let h = hash2(i, (t * 20.0) as i32, 3);
+                let dx = ((h % 100) as f32 / 100.0 - 0.3) * 14.0 * k;
+                let dy = ((h >> 8) % 100) as f32 / 100.0 * 10.0 * k;
+                p.rect_filled(Rect::from_min_size(torch + Vec2::new(dx, dy), Vec2::splat(k * 0.5)), 0.0, if h % 2 == 0 { YELLOW } else { Color32::from_rgb(255, 170, 70) });
+            }
         }
     }
     scanlines(&p, r, 18);
@@ -185,6 +216,15 @@ pub fn hangar_ui(
         // Icon plinth
         let ir = Rect::from_min_size(cr.min + Vec2::new(10.0, 32.0), Vec2::splat(88.0));
         p.rect_filled(ir, 0.0, PANEL_DARK);
+        // Spotlit pedestal under the part.
+        p.add(egui::Shape::convex_polygon(
+            vec![ir.center_top() + Vec2::new(-6.0, 0.0), ir.center_top() + Vec2::new(6.0, 0.0), ir.max - Vec2::new(8.0, 10.0), Pos2::new(ir.min.x + 8.0, ir.max.y - 10.0)],
+            accent.gamma_multiply(0.12),
+            Stroke::NONE,
+        ));
+        p.rect_filled(Rect::from_min_size(Pos2::new(ir.min.x + 14.0, ir.max.y - 12.0), Vec2::new(ir.width() - 28.0, 4.0)), 0.0, Color32::from_rgb(70, 66, 60));
+        p.rect_filled(Rect::from_min_size(Pos2::new(ir.min.x + 10.0, ir.max.y - 8.0), Vec2::new(ir.width() - 20.0, 4.0)), 0.0, Color32::from_rgb(44, 42, 40));
+        p.rect_filled(Rect::from_min_size(Pos2::new(ir.min.x + 14.0, ir.max.y - 12.0), Vec2::new(ir.width() - 28.0, 1.0)), 0.0, Color32::from_rgb(120, 114, 100));
         let bob = ((t * 2.0 + i as f64).sin() * 2.0) as f32;
         art.sprites.icons[info.icon].paint(&p, ir.min + Vec2::new(4.0, 4.0 + bob.round()), 4.0, 0.0, None, false);
         child(&mut ui, Rect::from_min_max(Pos2::new(ir.max.x + 10.0, ir.min.y - 2.0), Pos2::new(cr.max.x - 8.0, ir.max.y + 8.0)), |ui| {
