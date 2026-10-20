@@ -141,7 +141,7 @@ pub fn hangar_ui(
     // --- Bottom: salvage choices --------------------------------------------------------------
     let cards_r = Rect::from_min_max(Pos2::new(r.min.x + 20.0, r.max.y - 300.0), Pos2::new(r.max.x - 20.0, r.max.y - 16.0));
     p.rect_filled(cards_r.expand(4.0), 0.0, Color32::from_black_alpha(150));
-    text(&p, cards_r.left_top() + Vec2::new(4.0, -26.0), Align2::LEFT_TOP, "SALVAGE YARD — CRANE CAPACITY: 1 PART", pix(12.0), AMBER);
+    text(&p, cards_r.left_top() + Vec2::new(4.0, -26.0), Align2::LEFT_TOP, "SALVAGE — CHOOSE ONE", pix(12.0), AMBER);
     let n = campaign.salvage.len().max(1) as f32;
     let gap = 12.0;
     let cw = (cards_r.width() - gap * (n - 1.0)) / n;
@@ -172,7 +172,7 @@ pub fn hangar_ui(
             ui.add(egui::Label::new(egui::RichText::new(format!("- {}", info.cons)).size(19.0).color(Color32::from_rgb(240, 120, 100))).wrap());
             if !info.maker.original() {
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new("ORIGINAL FRAME -11%").size(16.0).color(AMBER));
+                ui.label(egui::RichText::new("−11% ORIGINAL").size(16.0).color(AMBER));
             }
         });
         let br = Rect::from_min_size(Pos2::new(cr.min.x + 10.0, cr.max.y - 44.0), Vec2::new(cw - 20.0, 34.0));
