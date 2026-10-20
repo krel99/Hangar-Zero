@@ -135,19 +135,20 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
     radio.time = 0.0;
     radio.log.clear();
     let script: [(f32, Voice, &str); 12] = [
-        (0.0, Voice::System, "BASTION OS v7.31 — COLD START COMPLETE. 3 OF 9 SUBSYSTEMS REPORT FAULTS."),
-        (2.0, Voice::Control, "Bastion, City Control. Uplink mast is dark. Get it back up and hold the line."),
-        (31.0, Voice::Control, "Bastion, seismic thump bearing 302. Something heavy is setting up out there."),
+        (0.0, Voice::System, "COLD START. 3 FAULTS."),
+        (2.0, Voice::Control, "Uplink's dark. Get it up, hold the line."),
+        (31.0, Voice::Control, "Heavy contact bearing 302."),
         (47.0, Voice::Pilot, "Scout down."),
-        (56.0, Voice::Control, "Hive signature bearing 118. Carrier class. Don't let the ticks latch on."),
-        (66.0, Voice::Enemy, "[INTERCEPT] CRB-03: braced. Ranging on the walker."),
-        (74.0, Voice::Chief, "Boarding drones! Point defence on, or they'll chew through the hull."),
-        (88.0, Voice::System, "HULL CONTACT: boarding drone latched onto COOLANT LINES."),
-        (88.5, Voice::System, "PARASITIC DRAW DETECTED: -6 UNITS"),
-        (102.0, Voice::Control, "Uplink took a hit! Restore progress lost."),
-        (119.0, Voice::Chief, "Core's running hot. Ease off the rail or give me more cooling."),
-        (128.0, Voice::Pilot, "Rail's charged. Crab first, then the jackals."),
+        (56.0, Voice::Control, "Carrier bearing 118. Watch for ticks."),
+        (66.0, Voice::Enemy, "CRB-03 braced. Ranging."),
+        (74.0, Voice::Chief, "Boarders. Point defence on."),
+        (88.0, Voice::System, "BOARDER ON COOLANT LINES."),
+        (88.5, Voice::System, "PARASITIC DRAW -6u"),
+        (102.0, Voice::Control, "Uplink hit. Progress lost."),
+        (119.0, Voice::Chief, "Core's hot. Ease off."),
+        (128.0, Voice::Pilot, "Rail's up. Crab first."),
     ];
+
     for (t, v, s) in script {
         radio.log.push(RadioMsg { time: t, voice: v, text: s.into() });
     }
@@ -197,8 +198,8 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
             mech.repair_target = Section::Coolant;
             mech.rail_charge = 0.55;
             mech.heat_peak = 112.0;
-            radio.log.push(RadioMsg { time: 129.0, voice: Voice::System, text: "!! REACTOR OVERLOAD !! CONTAINMENT FAILURE IMMINENT.".into() });
-            radio.log.push(RadioMsg { time: 129.2, voice: Voice::Chief, text: "Vent it, SCRAM it, or get out of there!".into() });
+            radio.log.push(RadioMsg { time: 129.0, voice: Voice::System, text: "REACTOR OVERLOAD. 12s.".into() });
+            radio.log.push(RadioMsg { time: 129.2, voice: Voice::Chief, text: "Vent it, scram it, or get out!".into() });
         }
         "eva" => {
             commands.spawn(mk(EnemyKind::Carrier, 4, deg(300.0), 345.0, EnemyState::Engaged, 96.0, 150.0, 1.0));
@@ -214,7 +215,7 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
             mech.hp[Section::Sensors.idx()] = 80.0;
             mech.hp[Section::Uplink.idx()] = 44.0;
             mech.repair_target = Section::Uplink;
-            radio.log.push(RadioMsg { time: 129.0, voice: Voice::Pilot, text: "Leaving the chair. Crawling to the coolant lines.".into() });
+            radio.log.push(RadioMsg { time: 129.0, voice: Voice::Pilot, text: "Going to the coolant lines.".into() });
         }
         _ => {
             // "combat" / "quad": the general cockpit view mid-fight. The artillery sits in the

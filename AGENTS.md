@@ -54,6 +54,11 @@ regenerated when the UI changes.
 
 - Buttons: `pbutton(ui, rect, "LABEL [KEY]", color, enabled, lit)`; the ` [KEY]` suffix becomes
   a small key tag.
+- The cockpit is: radar + radio (left), camera feed + station hotbar (centre), hull & core
+  gauges (right). No power routing in battle: the energy matrix lives in the hangar
+  (`campaign.matrix`, `MATRIX_COST`), and `Mech::new` copies it into `alloc`.
+- Balance is checked by `cargo test` (the autopilot must still win most seeded ops in 3–8 min)
+  and by looking at a `play` strip; after touching heat, damage or costs run both.
 - Text: `pix()` (Silkscreen) for labels and headings, `mono()` (VT323) for numbers and prose.
 - Keep the player-facing text minimal; the cockpit should read at a glance.
 - Commits go to `claude/lucid-bohr-18n3sd`; the user decides what reaches `main`.

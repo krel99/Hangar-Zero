@@ -30,7 +30,6 @@ pub fn autopilot(
             mech.active_cam = cam;
         }
     }
-    mech.alloc = if mech.heat > 60.0 { [5.0, 20.0, 10.0, 10.0, 10.0, 15.0, 30.0] } else { [5.0, 20.0, 20.0, 10.0, 10.0, 20.0, 15.0] };
     if mech.heat < 70.0 && mech.rail_charge >= 1.0 {
         cmds.fire_rail = true;
     }

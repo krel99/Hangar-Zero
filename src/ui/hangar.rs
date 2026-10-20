@@ -10,7 +10,8 @@ use bevy_egui::{
 use super::cockpit::root_ui;
 use super::*;
 use crate::art;
-use crate::campaign::{Campaign, PartId, part};
+use crate::campaign::{Campaign, MATRIX_COST, PartId, part};
+use crate::sim::Sys;
 use crate::rng::hash2;
 use crate::sim::Section;
 use crate::{Flow, FlowRequest};
@@ -127,16 +128,41 @@ pub fn hangar_ui(
         text(&p, Pos2::new(inner.min.x, y), Align2::LEFT_TOP, "Nothing yet. Every bolt is factory.", mono(19.0), DIM);
         y += 18.0;
     }
-    for id in campaign.installed.iter().rev().take(7) {
+    for id in campaign.installed.iter().rev().take(4) {
         let info = part(*id);
         text(&p, Pos2::new(inner.min.x, y), Align2::LEFT_TOP, format!("· {}", info.name), mono(19.0), rgb(info.maker.accent()));
         y += 18.0;
     }
-    y += 8.0;
-    let lore = "Each graft rewires a station in the cockpit: new faceplates, new readouts. Keep her original, or turn her into whatever survives.";
-    child(&mut ui, Rect::from_min_max(Pos2::new(inner.min.x, y), inner.max), |ui| {
-        ui.add(egui::Label::new(egui::RichText::new(lore).size(19.0).color(DIM)).wrap());
-    });
+    y += 10.0;
+
+    // --- Energy matrix: what is wired to the reactor for the next op ------------------------
+    let output = campaign.mods.reactor_output;
+    let draw = campaign.matrix_draw();
+    text(&p, Pos2::new(inner.min.x, y), Align2::LEFT_TOP, "ENERGY MATRIX", pix(10.0), AMBER);
+    text(&p, Pos2::new(inner.max.x, y - 4.0), Align2::RIGHT_TOP, format!("{draw:.0} / {output:.0}u"), mono(24.0), if draw > output { RED } else { GREEN });
+    y += 22.0;
+    seg_bar(&p, Rect::from_min_size(Pos2::new(inner.min.x, y), Vec2::new(inner.width(), 12.0)), draw / output, 20, if draw > output { RED } else { GREEN });
+    y += 20.0;
+    let mut toggle: Option<usize> = None;
+    for (i, sys) in Sys::ALL.iter().enumerate() {
+        let on = campaign.matrix[i];
+        let cost = MATRIX_COST[i];
+        let row = Rect::from_min_size(Pos2::new(inner.min.x, y), Vec2::new(inner.width(), 22.0));
+        let can_on = on || draw + cost <= output;
+        let col = crate::ui::cockpit::sys_color(*sys);
+        let btn = Rect::from_min_size(Pos2::new(row.min.x, row.min.y + 1.0), Vec2::new(70.0, 20.0));
+        if pbutton(&mut ui, btn, if on { "WIRED" } else { "OFF" }, col, can_on, on).clicked() {
+            toggle = Some(i);
+        }
+        text(&p, Pos2::new(row.min.x + 80.0, row.center().y), Align2::LEFT_CENTER, sys.name(), pix(9.0), if on { col } else { DIM });
+        text(&p, Pos2::new(row.min.x + 140.0, row.center().y), Align2::LEFT_CENTER, format!("{cost:.0}u"), mono(18.0), if on { TEXT } else { DIM });
+        text(&p, Pos2::new(row.max.x, row.center().y), Align2::RIGHT_CENTER, sys.long_name(), mono(16.0), DIM);
+        y += 24.0;
+    }
+    if let Some(i) = toggle {
+        campaign.matrix[i] = !campaign.matrix[i];
+    }
+    text(&p, Pos2::new(inner.min.x, y + 4.0), Align2::LEFT_TOP, "The reactor can't feed everything. Choose before you walk.", mono(17.0), DIM);
 
     // --- Bottom: salvage choices --------------------------------------------------------------
     let cards_r = Rect::from_min_max(Pos2::new(r.min.x + 20.0, r.max.y - 300.0), Pos2::new(r.max.x - 20.0, r.max.y - 16.0));

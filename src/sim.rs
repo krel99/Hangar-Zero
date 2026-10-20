@@ -126,17 +126,18 @@ impl Sys {
 
     pub fn long_name(self) -> &'static str {
         match self {
-            Sys::Locomotion => "Locomotion: evasive stepping, dodges shells",
-            Sys::Sensors => "Sensors: radar range and contact ID",
-            Sys::Railgun => "Railgun: capacitor charge rate",
-            Sys::Autocannon => "Autocannon: rate of fire / point defence",
-            Sys::Shields => "Shield array: capacity and regen",
-            Sys::Repair => "Repair drones: fix the selected subsystem",
-            Sys::Cooling => "Cooling: pulls heat out of the core",
+            Sys::Locomotion => "dodge shells and scouts",
+            Sys::Sensors => "radar range, tighter blips",
+            Sys::Railgun => "capacitor charge",
+            Sys::Autocannon => "point defence, scouts",
+            Sys::Shields => "absorbs hits, costs heat",
+            Sys::Repair => "drones fix one section",
+            Sys::Cooling => "pulls heat from the core",
         }
     }
 
     /// Maximum units the bus to this system can carry.
+    #[allow(dead_code)]
     pub fn cap(self) -> f32 {
         match self {
             Sys::Locomotion => 30.0,
@@ -149,6 +150,7 @@ impl Sys {
         }
     }
 
+    #[allow(dead_code)]
     pub fn default_alloc(self) -> f32 {
         match self {
             Sys::Locomotion => 10.0,
@@ -198,6 +200,8 @@ pub fn camera_for(angle: f32) -> usize {
     (((angle + CAMERA_FOV / 2.0).rem_euclid(TAU)) / CAMERA_FOV) as usize % CAMERAS
 }
 
+/// Heat per railgun shot.
+pub const RAIL_HEAT: f32 = 26.0;
 pub const OVERDRIVE: f32 = 1.3;
 /// Heat per second for every unit drawn past the reactor's rated output.
 pub const OVERDRIVE_HEAT: f32 = 0.25;
@@ -242,6 +246,8 @@ pub struct Mech {
     pub kills: u32,
     /// Hull camera health; a dead camera leaves its quadrant radar-only.
     pub cameras: [f32; CAMERAS],
+    /// Seconds-ish since each section last took damage (1 = just now), for the diagram.
+    pub hit_t: [f32; 10],
     pub active_cam: usize,
     pub quad_view: bool,
     /// Snapshot of the derived numbers for the UI.
@@ -271,10 +277,7 @@ impl Mech {
     pub fn new(campaign: &Campaign) -> Self {
         let mut hp = campaign.max_hp;
         hp[Section::Uplink.idx()] = 0.0;
-        let mut alloc = [0.0; 7];
-        for s in Sys::ALL {
-            alloc[s.idx()] = s.default_alloc();
-        }
+        let alloc = campaign.alloc();
         Self {
             hp,
             max_hp: campaign.max_hp,
@@ -306,6 +309,7 @@ impl Mech {
             shake: 0.0,
             kills: 0,
             cameras: campaign.cameras,
+            hit_t: [0.0; 10],
             active_cam: 0,
             quad_view: false,
             stats: Derived::default(),
@@ -351,6 +355,9 @@ impl Mech {
     pub fn damage(&mut self, s: Section, amount: f32) {
         let i = s.idx();
         self.hp[i] = (self.hp[i] - amount).max(0.0);
+        if amount > 0.3 {
+            self.hit_t[i] = 1.0;
+        }
     }
 }
 
@@ -705,11 +712,11 @@ fn spawn_waves(
             EnemyKind::Scout => {}
             EnemyKind::Artillery => radio.say(
                 Voice::Control,
-                format!("Bastion, seismic thump bearing {:03.0}. Something heavy is setting up out there.", bearing_deg(a)),
+                format!("Heavy contact bearing {:03.0}.", bearing_deg(a)),
             ),
             EnemyKind::Carrier => radio.say(
                 Voice::Control,
-                format!("Hive signature bearing {:03.0}. Carrier class. Don't let the ticks latch on.", bearing_deg(a)),
+                format!("Carrier bearing {:03.0}. Watch for ticks.", bearing_deg(a)),
             ),
         }
     }
@@ -770,6 +777,9 @@ fn power_and_heat(
         *t = (*t - dt).max(0.0);
     }
     mech.hit_flash = (mech.hit_flash - dt * 2.5).max(0.0);
+    for t in mech.hit_t.iter_mut() {
+        *t = (*t - dt * 1.5).max(0.0);
+    }
     mech.shake = (mech.shake - dt * 3.0).max(0.0);
 
     // --- Emergency actions -------------------------------------------------------------
@@ -778,21 +788,20 @@ fn power_and_heat(
         mech.vent_cd = 25.0;
         mech.shields_down_t = 6.0;
         mech.damage(Section::Coolant, 4.0);
-        radio.say(Voice::System, "COOLANT VENT OPEN. SHIELD EMITTERS OFFLINE 6s.");
+        radio.say(Voice::System, "VENTING. SHIELDS DOWN 6s.");
     }
     if std::mem::take(&mut cmds.scram) && mech.scram_cd <= 0.0 {
         mech.scram_t = 6.0;
         mech.scram_cd = 30.0;
-        radio.say(Voice::System, "SCRAM. CONTROL RODS DOWN. ALL BUSES DEAD FOR 6s.");
-        radio.say(Voice::Pilot, "Come on, come on... stay cold for me.");
+        radio.say(Voice::System, "SCRAM. ALL BUSES DEAD 6s.");
     }
 
     // --- Cockpit breach --------------------------------------------------------------
     if mech.frac(Section::Cockpit) < 0.25 && !mech.interlocks_failed {
         if mech.breach.is_none() {
             mech.breach = Some(BREACH_TIME);
-            radio.say(Voice::System, "COCKPIT BREACH. LIFE SUPPORT ON RESERVE. REACTOR INTERLOCKS ON MANUAL.");
-            radio.say(Voice::Chief, "Patch that canopy, kid! When the air goes, so do the reactor interlocks.");
+            radio.say(Voice::System, "COCKPIT BREACH. 45s TO INTERLOCK FAILURE.");
+            radio.say(Voice::Chief, "Patch the canopy, kid.");
         }
     } else if mech.frac(Section::Cockpit) >= 0.35 && mech.breach.is_some() {
         mech.breach = None;
@@ -803,7 +812,7 @@ fn power_and_heat(
         if *t <= 0.0 {
             mech.breach = None;
             mech.interlocks_failed = true;
-            radio.say(Voice::System, "INTERLOCK FAILURE. REACTOR REGULATION LOST. CORE HEAT RISING.");
+            radio.say(Voice::System, "INTERLOCKS FAILED. CORE RUNNING AWAY.");
         }
     }
 
@@ -811,22 +820,22 @@ fn power_and_heat(
     if mech.heat >= HEAT_CRIT {
         if mech.overload.is_none() {
             mech.overload = Some(OVERLOAD_TIME);
-            radio.say(Voice::System, "!! REACTOR OVERLOAD !! CONTAINMENT FAILURE IMMINENT.");
-            radio.say(Voice::Chief, "Vent it, SCRAM it, or get out of there!");
+            radio.say(Voice::System, "REACTOR OVERLOAD. 12s.");
+            radio.say(Voice::Chief, "Vent it, scram it, or get out!");
         }
     } else if mech.heat < 92.0 && mech.overload.is_some() {
         mech.overload = None;
-        radio.say(Voice::System, "Core temperature receding. Overload countdown aborted.");
+        radio.say(Voice::System, "Core cooling. Overload aborted.");
         radio.say(Voice::Pilot, "...Breathe.");
     }
     if let Some(t) = mech.overload.as_mut() {
         *t -= dt;
     }
     if mech.heat > 80.0 && mission.warn_once("heat80") {
-        radio.say(Voice::Chief, "Core's running hot. Ease off the rail or give me more cooling.");
+        radio.say(Voice::Chief, "Core's hot. Ease off.");
     }
     if n_boarders > 0.0 && mission.warn_once("hack") {
-        radio.say(Voice::System, format!("PARASITIC DRAW DETECTED: -{:.0} UNITS", parasitic));
+        radio.say(Voice::System, format!("PARASITIC DRAW -{:.0}u", parasitic));
     }
 
     mech.stats = st;
@@ -858,14 +867,15 @@ pub fn derive(mech: &Mech, m: &Mods, n_boarders: f32) -> Derived {
     let legs = (mech.eff(Section::LeftLeg) + mech.eff(Section::RightLeg)) * 0.5;
     let leg_penalty = if mech.hp[Section::LeftLeg.idx()] <= 0.0 || mech.hp[Section::RightLeg.idx()] <= 0.0 { 0.4 } else { 1.0 };
     let evasion = (eff[Sys::Locomotion.idx()] / 30.0 * m.loco_mult * legs * leg_penalty).clamp(0.0, 1.0);
-    let cooling = eff[Sys::Cooling.idx()] * 0.5 * m.cooling_mult * mech.eff(Section::Coolant);
+    // Passive radiators plus whatever the cooling bus is wired for.
+    let cooling = (2.0 + eff[Sys::Cooling.idx()] * 0.6) * m.cooling_mult * mech.eff(Section::Coolant);
     let shield_cap = eff[Sys::Shields.idx()] * 4.0 * m.shield_mult * mech.eff(Section::ShieldGen);
-    let rail_rate = eff[Sys::Railgun.idx()] / 40.0 * 0.3 * m.rail_charge_mult * mech.eff(Section::Railgun);
+    let rail_rate = eff[Sys::Railgun.idx()] / 40.0 * 0.4 * m.rail_charge_mult * mech.eff(Section::Railgun);
     let ac_dps = eff[Sys::Autocannon.idx()] * 0.7 * m.ac_mult * mech.eff(Section::Autocannon);
     let repair_rate = eff[Sys::Repair.idx()] * 0.16 * m.repair_mult;
 
     // --- Heat ----------------------------------------------------------------------
-    let mut heat_in = (1.0 + delivered * 0.03) * m.base_heat_mult + overdrive * OVERDRIVE_HEAT;
+    let mut heat_in = (1.0 + delivered * 0.025) * m.base_heat_mult + overdrive * OVERDRIVE_HEAT;
     heat_in += (1.0 - mech.frac(Section::Reactor)) * 4.0;
     if mech.frac(Section::Coolant) < 0.35 {
         heat_in += 2.5;
@@ -874,7 +884,7 @@ pub fn derive(mech: &Mech, m: &Mods, n_boarders: f32) -> Derived {
         heat_in += 3.0;
     }
     if mech.ac_firing {
-        heat_in += eff[Sys::Autocannon.idx()] * 0.14;
+        heat_in += eff[Sys::Autocannon.idx()] * 0.2;
     }
     let mut heat_out = cooling;
     if mech.scram_t > 0.0 {
@@ -918,7 +928,7 @@ fn pilot_actions(
     {
         let dur = crawl_time(to);
         mech.pilot = Pilot::Crawling { to, t: 0.0, dur };
-        radio.say(Voice::Pilot, format!("Leaving the chair. Crawling to the {}.", to.name().to_lowercase()));
+        radio.say(Voice::Pilot, format!("Going to the {}.", to.name().to_lowercase()));
     }
     let want_return = std::mem::take(&mut cmds.return_to_seat);
     mech.pilot = match mech.pilot {
@@ -939,7 +949,7 @@ fn pilot_actions(
                 if !here.is_empty() {
                     if t >= 2.2 {
                         commands.entity(here[0]).despawn();
-                        radio.say(Voice::Pilot, "Got one. Pried it off with the wrench.");
+                        radio.say(Voice::Pilot, "Got one.");
                         Pilot::Working { at, t: 0.0 }
                     } else {
                         Pilot::Working { at, t }
@@ -959,7 +969,7 @@ fn pilot_actions(
                         let was_dead = mech.cameras[cam] < CAMERA_MIN;
                         mech.cameras[cam] = (mech.cameras[cam] + 4.0 * dt).min(CAMERA_HP);
                         if was_dead && mech.cameras[cam] >= CAMERA_MIN {
-                            radio.say(Voice::Pilot, format!("{} camera's back. Picture's rough, but it's a picture.", CAMERA_NAMES[cam]));
+                            radio.say(Voice::Pilot, format!("{} camera's back.", CAMERA_NAMES[cam]));
                         }
                     }
                     Pilot::Working { at, t }
@@ -1010,7 +1020,7 @@ fn weapons(
         if let Some(te) = tgt {
             let (_, mut e) = enemies.get_mut(te).unwrap();
             mech.rail_charge = 0.0;
-            mech.heat += 22.0 + m.rail_heat;
+            mech.heat += RAIL_HEAT + m.rail_heat;
             mech.shake = 1.0;
             let mut p = 0.92 * (0.5 + 0.5 * mech.eff(Section::Sensors));
             if e.kind == EnemyKind::Scout {
@@ -1024,7 +1034,7 @@ fn weapons(
                 e.hit_flash = 0.4;
                 fx.add(FxKind::Explosion, e.angle, e.dist, 0.7);
             } else {
-                radio.say(Voice::Pilot, "Missed! Recharging...");
+                radio.say(Voice::Pilot, "Miss.");
             }
         }
     }
@@ -1108,7 +1118,7 @@ fn weapons(
                 e.stun = 3.5;
             }
         }
-        radio.say(Voice::System, format!("ECM BURST. {fried} hostile drone(s) fried. Nearby contacts jammed."));
+        radio.say(Voice::System, format!("ECM. {fried} drones fried."));
     }
 
     // --- Kills ----------------------------------------------------------------------------
@@ -1122,8 +1132,8 @@ fn weapons(
             }
             let line = match en.kind {
                 EnemyKind::Scout => "Scout down.",
-                EnemyKind::Artillery => "Crab's cracked open. Artillery silenced.",
-                EnemyKind::Carrier => "Carrier destroyed. No more ticks from that one.",
+                EnemyKind::Artillery => "Crab down.",
+                EnemyKind::Carrier => "Carrier down.",
             };
             radio.say(Voice::Pilot, line);
         }
@@ -1165,7 +1175,7 @@ fn enemy_ai(
                         e.timer = rng.range(1.6, 2.4);
                         fx.add(FxKind::Muzzle, e.angle, e.dist, 0.2);
                         let close = if e.dist < 250.0 { 1.0 } else { 0.7 };
-                        if rng.chance(0.65 * close * (1.0 - 0.6 * evasion)) {
+                        if rng.chance(0.5 * close * (1.0 - 0.6 * evasion)) {
                             const TARGETS: [Section; 7] = [
                                 Section::Sensors,
                                 Section::Cockpit,
@@ -1177,7 +1187,7 @@ fn enemy_ai(
                             ];
                             let s = TARGETS[rng.index(TARGETS.len())];
                             let from = e.angle;
-                            hit_mech(&mut mech, &mut mission, s, rng.range(5.0, 8.0), Some(from));
+                            hit_mech(&mut mech, &mut mission, s, rng.range(4.0, 7.0), Some(from));
                         }
                     }
                 }
@@ -1194,7 +1204,7 @@ fn enemy_ai(
                     if e.timer <= 0.0 {
                         e.state = EnemyState::Engaged;
                         e.timer = 0.5;
-                        radio.say(Voice::Enemy, format!("[INTERCEPT] {}-{:02}: braced. Ranging on the walker.", e.kind.callsign(), e.serial));
+                        radio.say(Voice::Enemy, format!("{}-{:02} braced. Ranging.", e.kind.callsign(), e.serial));
                     }
                 }
                 EnemyState::Engaged => {
@@ -1237,7 +1247,7 @@ fn enemy_ai(
                         e.drones -= 1;
                         commands.spawn(Drone { angle: e.angle, dist: e.dist - 10.0, hp: 14.0 });
                         if mission.warn_once("first_drone") {
-                            radio.say(Voice::Chief, "Boarding drones! Point defence on, or they'll chew through the hull.");
+                            radio.say(Voice::Chief, "Boarders. Point defence on.");
                         }
                     }
                 }
@@ -1330,7 +1340,7 @@ fn drones(
             ];
             let s = SPOTS[rng.index(SPOTS.len())];
             commands.spawn(Boarder { section: s, age: 0.0 });
-            radio.say(Voice::System, format!("HULL CONTACT: boarding drone latched onto {}.", s.name()));
+            radio.say(Voice::System, format!("BOARDER ON {}.", s.name()));
         }
     }
 }
@@ -1350,24 +1360,24 @@ fn shells(
         s.t += dt;
         if s.t >= s.flight {
             commands.entity(e).despawn();
-            let p = 0.85 - 0.55 * mech.stats.evasion;
+            let p = 0.7 - 0.5 * mech.stats.evasion;
             if rng.chance(p) {
-                let dmg = if s.target == Section::Uplink { 8.0 } else { rng.range(16.0, 24.0) };
+                let dmg = if s.target == Section::Uplink { 8.0 } else { rng.range(14.0, 20.0) };
                 let d1 = hit_mech(&mut mech, &mut mission, s.target, dmg, Some(s.angle));
                 let splash = Section::ALL[rng.index(9)];
                 let d2 = hit_mech(&mut mech, &mut mission, splash, 5.0, Some(s.angle));
                 if let Some(cam) = d1.or(d2) {
-                    radio.say(Voice::System, format!("CAMERA {} LOST. QUADRANT IS RADAR-ONLY.", CAMERA_NAMES[cam]));
+                    radio.say(Voice::System, format!("CAMERA {} LOST.", CAMERA_NAMES[cam]));
                 }
                 mech.shake = 1.4;
                 fx.add(FxKind::ShellImpact, s.angle, 30.0, 0.8);
                 if s.target == Section::Uplink {
-                    radio.say(Voice::Control, "Uplink took a hit! Restore progress lost.");
+                    radio.say(Voice::Control, "Uplink hit. Progress lost.");
                 }
             } else {
                 fx.add(FxKind::ShellImpact, s.angle + 0.4, 120.0, 0.8);
                 if mission.warn_once("dodge") {
-                    radio.say(Voice::Pilot, "Stepped clear of that one. Keep the legs moving.");
+                    radio.say(Voice::Pilot, "Stepped clear.");
                 }
             }
         }
@@ -1387,7 +1397,7 @@ fn boarders(time: Res<Time>, campaign: Res<Campaign>, mut mech: ResMut<Mech>, mu
 fn check_outcome(mut mech: ResMut<Mech>, mut mission: ResMut<Mission>, mut radio: ResMut<Radio>, mut cmds: ResMut<PilotCommands>) {
     if mech.uplink() >= 100.0 {
         mission.outcome = Some(Outcome::Victory);
-        radio.say(Voice::Control, "Uplink green! The city grid is talking to us again. Bring her home, Bastion.");
+        radio.say(Voice::Control, "Uplink green. Bring her home.");
     } else if mech.overload.is_some_and(|t| t <= 0.0) {
         mission.outcome = Some(Outcome::Meltdown);
         mech.heat = HEAT_MAX;

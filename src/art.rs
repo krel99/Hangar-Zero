@@ -123,6 +123,8 @@ pub struct SpriteBank {
     pub wrench: Sprite,
     /// Interior machinery per section, indexed by `Section::idx()`.
     pub props: Vec<Sprite>,
+    /// Hotbar miniatures: RAIL, A/C, ECM, VENT, SCRAM, EJECT, CREW.
+    pub hotbar: Vec<Sprite>,
     pub arm_rail: Sprite,
     pub arm_ac: Sprite,
 }
@@ -144,6 +146,7 @@ impl SpriteBank {
             icons: ICONS.iter().map(|i| Sprite::parse(i)).collect(),
             wrench: Sprite::parse(WRENCH),
             props: PROPS.iter().map(|i| Sprite::parse(i)).collect(),
+            hotbar: HOTBAR.iter().map(|i| Sprite::parse(i)).collect(),
             arm_rail: Sprite::parse(ARM_RAIL),
             arm_ac: Sprite::parse(ARM_AC),
         }
@@ -445,6 +448,146 @@ const PROPS: &[&[&str]] = &[
         "kmxxmxxmxxmxmk",
         "kmmmmmmmmmmmmk",
         "kkkkkkkkkkkkkk",
+    ],
+];
+
+// --------------------------------------------------------------------------------------
+// Hotbar miniatures (16x16)
+// --------------------------------------------------------------------------------------
+
+const HOTBAR: &[&[&str]] = &[
+    // RAIL: long barrel with capacitor rails
+    &[
+        "................",
+        "................",
+        "..kk............",
+        ".kcckkkkkkkkkkk.",
+        "kccCClllllllllhk",
+        "kcCCkmmmmmmmmmmk",
+        "kcCCkxxxxxxxxxxk",
+        "kccCClllllllllhk",
+        ".kcckkkkkkkkkkk.",
+        "..kkkmmk........",
+        "....kddk........",
+        "....kddk........",
+        "...kddddk.......",
+        "...kkkkkk.......",
+        "................",
+        "................",
+    ],
+    // A/C: rotary autocannon with a belt
+    &[
+        "................",
+        "....kkkk........",
+        "...kyyyyk.......",
+        "..kkkkkkkkkkkkk.",
+        ".kmmmmmmlllllllk",
+        "kdmkkkkkmmmmmmhk",
+        "kdmkxxxkmmmmmmhk",
+        "kdmkkkkkmmmmmmhk",
+        ".kmmmmmmlllllllk",
+        "..kkkkkkkkkkkkk.",
+        "...kykykyk......",
+        "...kkkkkkk......",
+        "....kddk........",
+        "....kddk........",
+        "...kkkkkk.......",
+        "................",
+    ],
+    // ECM: dish with a burst
+    &[
+        ".......c........",
+        "...c...c...c....",
+        "....c..c..c.....",
+        "..kkkkkkkkkkk...",
+        ".kSSSSsssssssk..",
+        "kSSsssssssssssk.",
+        "kSsttssssssssssk",
+        ".kssttsssssssk..",
+        "..kssstssssk....",
+        "...kkssskk......",
+        ".....kkkk.......",
+        "......kmk.......",
+        "......kmk.......",
+        ".....kmmmk......",
+        "....kkkkkkk.....",
+        "................",
+    ],
+    // VENT: coolant vane with steam
+    &[
+        "..w..w...w..w...",
+        ".w..w...w..w....",
+        "..w..w...w..w...",
+        "................",
+        "kkkkkkkkkkkkkkkk",
+        "kclclclclclclclk",
+        "kcIcIcIcIcIcIcIk",
+        "kclclclclclclclk",
+        "kcIcIcIcIcIcIcIk",
+        "kclclclclclclclk",
+        "kkkkkkkkkkkkkkkk",
+        "...kck....kck...",
+        "...kck....kck...",
+        "..kkckk..kkckk..",
+        "..kcIck..kcIck..",
+        "..kkkkk..kkkkk..",
+    ],
+    // SCRAM: control rods dropping into the core
+    &[
+        "..kk..kk..kk....",
+        "..kl..kl..kl....",
+        "..kl..kl..kl....",
+        ".kkkkkkkkkkkkkk.",
+        "kmllllllllllllmk",
+        "kmkkkkkkkkkkkkmk",
+        "kmkooyyyyyyookmk",
+        "kmkoyYYYYYYyokmk",
+        "kmkoyYYYYYYyokmk",
+        "kmkooyyyyyyookmk",
+        "kmkkkkkkkkkkkkmk",
+        "kmmmmmmmmmmmmmmk",
+        ".kkkkkkkkkkkkkk.",
+        "....krrrrrrk....",
+        "....kkkkkkkk....",
+        "................",
+    ],
+    // EJECT: the seat, canopy blown
+    &[
+        "......kkkk......",
+        ".....kyyyyk.....",
+        "....kyYYYYyk....",
+        "....kykkkkyk....",
+        "....kkkkkkkk....",
+        "...kuuuuuuuuk...",
+        "...kuoooooouk...",
+        "...kuoccccouk...",
+        "...kuoooooouk...",
+        "...kuuuuuuuuk...",
+        "....kkkkkkkk....",
+        ".....koook......",
+        "....kooooook....",
+        "...kyoooooooyk..",
+        "..kyyoooooooyyk.",
+        ".kkkkkkkkkkkkkkk",
+    ],
+    // CREW: the pilot with a wrench, out of the chair
+    &[
+        "......kkkk......",
+        ".....koooook....",
+        "....kooooook....",
+        "....kokccck.....",
+        "....koooook.....",
+        ".....knnnk..lhl.",
+        "....kttttkkl.h.l",
+        "...kttotttk.lhl.",
+        "..kntttottnk.h..",
+        "..kkttotttkk.h..",
+        "....kttttk...h..",
+        "....kedkdek..l..",
+        "....kdk.kdk.....",
+        "....kdk.kdk.....",
+        "...kkkk.kkkk....",
+        "................",
     ],
 ];
 
@@ -1180,8 +1323,8 @@ fn bayer(x: i32, y: i32) -> f32 {
 }
 
 pub const PANO_W: usize = 1280;
-pub const PANO_H: usize = 176;
-pub const HORIZON: i32 = 104;
+pub const PANO_H: usize = 208;
+pub const HORIZON: i32 = 124;
 
 /// Far layer of the 360° panorama: sky, moon, mountains, distant towers and smoke.
 /// Scrolled at a fraction of the camera's bearing for parallax.

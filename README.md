@@ -33,23 +33,31 @@ hangar backdrop is painted procedurally at startup, so the game ships no image a
 [VT323](https://fonts.google.com/specimen/VT323) and [Silkscreen](https://fonts.google.com/specimen/Silkscreen)
 (SIL OFL, in `assets/fonts`).
 
-### Power routing is the core verb
+### The energy matrix is set in the hangar
 
-The reactor makes **100 units**. Seven buses want **205**:
+The reactor makes **100 units**; the seven systems want **115**. In the hangar you choose what
+is wired before you walk — in battle there are no faders to fiddle with, only heat:
 
-| Bus | Cap | Effect |
+| System | Cost | Effect |
 |---|---|---|
-| LOCO | 30 | Evasive stepping. Dodges artillery and scout fire. A destroyed leg cuts it hard. |
-| SENS | 20 | Radar detection and ID range. Artillery parks *past* your default radar. |
-| RAIL | 40 | Capacitor charge rate. Each shot is +22 heat. |
-| A/C | 25 | Autocannon damage, point defence against boarding drones. Heats while firing. |
-| SHLD | 35 | Shield capacity and regen. Absorbed hits turn into heat. |
-| REPR | 25 | Repair drones work on **one** selected subsystem, or restore the uplink. |
-| COOL | 30 | Pulls heat out of the core. Scales with coolant-line health. |
+| LOCO | 15 | Evasive stepping. Dodges artillery and scout fire. A destroyed leg cuts it hard. |
+| SENS | 15 | Radar range and tighter radar-only blips. Artillery parks *past* your default radar. |
+| RAIL | 20 | Capacitor charge rate. Each shot is +26 heat. |
+| A/C | 15 | Autocannon damage and point defence against boarding drones. Heats while firing. |
+| SHLD | 15 | Shield capacity and regen. Absorbed hits turn into heat. |
+| REPR | 20 | Repair drones work on **one** selected section, or restore the uplink. |
+| COOL | 15 | Pulls heat out of the core. Scales with coolant-line health. |
 
-You can **overdrive** the bus up to 130% of available output. Past the white line every extra
-unit is heat. Past the red line you're in brownout and every system gets a proportional share.
-Boarding drones bolted to the hull feed on the bus (parasitic draw). A damaged reactor makes less.
+Bastion walks out on op 1 with everything but LOCO wired. Boarding drones bolted to the hull
+feed on the bus (parasitic draw); a damaged reactor makes less, and a brownout starves every
+system in proportion.
+
+### Stations
+
+Everything the pilot can do is a miniature on the hotbar under the camera feed, `1`–`7`:
+RAIL (`Space` too), A/C (toggle; point defence is always on), ECM, VENT, SCRAM, EJECT, CREW.
+Each shows its own charge. Fire everything at once and the core heats faster than it cools;
+an idle weapon cools.
 
 ### Heat and the failure state
 
@@ -57,8 +65,8 @@ Heat comes from the core load, overdrive, railgun shots, autocannon fire, shield
 a damaged reactor, leaking coolant, and failed interlocks after a cockpit breach. Above
 **100** the containment countdown starts (12 s). Get below 92 or lose the machine. Your outs:
 
-* **VENT** (`V`) dumps heat fast, but your shields drop for 6 s and the coolant lines take damage.
-* **SCRAM** (`X`) kills every bus for 6 s. You're cold, blind and defenceless.
+* **VENT** (`4`) dumps heat fast, but your shields drop for 6 s and the coolant lines take damage.
+* **SCRAM** (`5`) kills every bus for 6 s. You're cold, blind and defenceless.
 * **EJECT** unlocks during the countdown. You live, Bastion doesn't.
 
 ![Reactor overload](docs/overload.png)
@@ -83,7 +91,9 @@ quadrant is radar-only from the first contact.
 
 ### Localized damage
 
-Ten sections, each with its own integrity, and each one changes how you play:
+The hull diagram is the only damage readout: colour is health, the section being hit lights
+up, boarders crawl on it, and the shield is a blue halo around the silhouette that thins as it
+drains. Ten sections, each with its own integrity, and each one changes how you play:
 
 * **Legs**: evasion. Losing one leg cuts it by 60%.
 * **Sensor array**: radar range, contact ID, camera static, ghost contacts.
@@ -139,12 +149,10 @@ Or you take the **Bastion Original Spares** and try to keep her the machine she 
 | `Tab` / `Shift+Tab` | Turn to the next hull camera clockwise / counter-clockwise |
 | `C` / QUAD | Camera wall: all four feeds at once |
 | Click radar blip / contact row, `T` | Select target |
-| `Space` / FIRE | Fire railgun (needs full charge and a target inside radar range) |
-| Drag faders, `+`/`-`, `1`–`7` + `↑`/`↓` | Route power (`Shift` for ±1) |
-| ASSAULT / RESTORE | Routing presets |
-| `V` / `X` / `E` | Vent / SCRAM / ECM burst (fries nearby drones and boarders, jams scouts) |
-| Click hull diagram or row | Send repair drones there |
-| GO / LEAVE CHAIR / interior click | Crawl to a compartment |
+| `1`–`7` / click a station | RAIL · A/C · ECM · VENT · SCRAM · EJECT · CREW |
+| `Space` | Fire railgun (needs full charge and a target inside radar range) |
+| Click the hull diagram | Send repair drones to that section |
+| CREW / interior click | Leave the chair and crawl to a compartment; CREW again returns |
 | `P` / `Esc` | Pause |
 
 ## Building

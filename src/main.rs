@@ -128,12 +128,12 @@ fn start_mission(mut commands: Commands, campaign: Res<Campaign>, mut radio: Res
     *radio = Radio::default();
     fx.list.clear();
     *cmds = PilotCommands::default();
-    radio.say(Voice::System, "BASTION OS v7.31 — COLD START COMPLETE. 3 OF 9 SUBSYSTEMS REPORT FAULTS.");
-    radio.say(Voice::Control, "Bastion, City Control. Uplink mast is dark. Get it back up and hold the line.");
+    radio.say(Voice::System, "COLD START. 3 FAULTS.");
+    radio.say(Voice::Control, "Uplink's dark. Get it up, hold the line.");
     if campaign.mission > 1 {
-        radio.say(Voice::Chief, format!("Op {:02}. She's not the machine she was, kid. Neither are we.", campaign.mission));
+        radio.say(Voice::Chief, format!("Op {:02}. She's not what she was.", campaign.mission));
     } else {
-        radio.say(Voice::Chief, "Old girl hasn't walked in thirty years. Be gentle with the reactor.");
+        radio.say(Voice::Chief, "Thirty years in a shed. Go easy on the core.");
     }
 }
 

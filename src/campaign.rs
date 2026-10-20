@@ -246,6 +246,8 @@ pub struct Campaign {
     pub last_report: Option<MissionReport>,
     /// Hull camera health carried between operations.
     pub cameras: [f32; crate::sim::CAMERAS],
+    /// Energy matrix: which systems are wired to the reactor. Set in the hangar.
+    pub matrix: [bool; 7],
 }
 
 impl Default for Campaign {
@@ -266,11 +268,32 @@ impl Default for Campaign {
             salvage: Vec::new(),
             last_report: None,
             cameras: [crate::sim::CAMERA_HP, crate::sim::CAMERA_HP, crate::sim::CAMERA_HP, 0.0],
+            matrix: DEFAULT_MATRIX,
         }
     }
 }
 
+/// Reactor draw of each wired system, in `Sys` order (LOCO, SENS, RAIL, A/C, SHLD, REPR, COOL).
+pub const MATRIX_COST: [f32; 7] = [15.0, 15.0, 20.0, 15.0, 15.0, 20.0, 15.0];
+/// Op 1 loadout: everything but locomotion (the left leg is scarred anyway).
+pub const DEFAULT_MATRIX: [bool; 7] = [false, true, true, true, true, true, true];
+
 impl Campaign {
+    /// Power each bus gets in battle: its fixed cost if wired, else nothing.
+    pub fn alloc(&self) -> [f32; 7] {
+        let mut a = [0.0; 7];
+        for i in 0..7 {
+            if self.matrix[i] {
+                a[i] = MATRIX_COST[i];
+            }
+        }
+        a
+    }
+
+    pub fn matrix_draw(&self) -> f32 {
+        (0..7).filter(|i| self.matrix[*i]).map(|i| MATRIX_COST[i]).sum()
+    }
+
     /// Permanent wear: every mission leaves scars proportional to damage taken.
     pub fn apply_scars(&mut self, mission: &Mission, kills: u32, heat_peak: f32) {
         let mut scars = Vec::new();

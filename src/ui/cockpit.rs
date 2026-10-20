@@ -27,7 +27,6 @@ pub enum CamMode {
 #[derive(Default)]
 pub struct CockpitUi {
     pub cam_mode: CamMode,
-    pub selected_sys: usize,
 }
 
 /// Snapshot of the world the UI needs, gathered once per frame.
@@ -108,31 +107,29 @@ pub fn cockpit_ui(
     let r = r.translate(jolt);
 
     let w = r.width();
-    let h = r.height();
     let top = Rect::from_min_size(r.min + Vec2::new(8.0, 6.0), Vec2::new(w - 16.0, 44.0));
     let main_y0 = r.min.y + 56.0;
-    let bottom_h = 196.0;
-    let main_y1 = r.max.y - bottom_h - 14.0;
+    let main_y1 = r.max.y - 6.0;
     let left_w = 330.0;
-    let right_w = 410.0;
+    let right_w = 236.0;
     let left = Rect::from_min_max(Pos2::new(r.min.x + 8.0, main_y0), Pos2::new(r.min.x + 8.0 + left_w, main_y1));
     let right = Rect::from_min_max(Pos2::new(r.max.x - 8.0 - right_w, main_y0), Pos2::new(r.max.x - 8.0, main_y1));
     let center = Rect::from_min_max(Pos2::new(left.max.x + 8.0, main_y0), Pos2::new(right.min.x - 8.0, main_y1));
-    // The camera wall is the hero: as tall as the full-width feed needs, the rest is weapons.
-    let feed_h = ((center.width() - 20.0) / FEED_W * FEED_H + 38.0).min(center.height() - 120.0);
+    // The camera wall is the hero: as tall as the full-width feed needs, the hotbar takes the rest.
+    let feed_h = ((center.width() - 20.0) / FEED_W * FEED_H + 38.0).min(center.height() - 136.0);
     let feed = Rect::from_min_size(center.min, Vec2::new(center.width(), feed_h));
-    let weapons = Rect::from_min_max(Pos2::new(center.min.x, feed.max.y + 8.0), center.max);
-    let hull = Rect::from_min_max(Pos2::new(r.min.x + 8.0, main_y1 + 8.0), Pos2::new(left.max.x, r.max.y - 6.0));
-    let radio_r = Rect::from_min_max(Pos2::new(hull.max.x + 8.0, hull.min.y), Pos2::new(r.max.x - 8.0, hull.max.y));
-    let _ = h;
+    let hotbar = Rect::from_min_max(Pos2::new(center.min.x, feed.max.y + 8.0), center.max);
+    let radar_h = left.width() + 30.0;
+    let radar = Rect::from_min_size(left.min, Vec2::new(left.width(), radar_h));
+    let log = Rect::from_min_max(Pos2::new(left.min.x, radar.max.y + 8.0), left.max);
 
     top_bar(&mut root, top, &mech, &mut mission, &scene);
-    radar_panel(&mut root, left, &mut mech, &campaign, &scene);
+    radar_panel(&mut root, radar, &mut mech, &campaign, &scene);
+    log_panel(&mut root, log, &art, &radio, mission.running());
     feed_panel(&mut root, feed, &art, &mut mech, &fx, &mut cmds, &campaign, &scene, &mut st);
-    weapons_panel(&mut root, weapons, &mut mech, &mut cmds, &campaign, &scene);
-    power_panel(&mut root, right, &mut mech, &mut cmds, &campaign, &scene, &mut st);
-    hull_panel(&mut root, hull, &art, &mut mech, &mut cmds, &campaign, &scene);
-    radio_panel(&mut root, radio_r, &art, &radio, mission.running());
+    hotbar_panel(&mut root, hotbar, &art, &mut mech, &mut cmds, &campaign, &scene);
+    hull_panel(&mut root, right, &art, &mut mech, &mut cmds, &campaign, &scene);
+    overload_banner(&mut root, feed, &mech, &scene);
 
     // Global alarm tint
     let p = root.painter();
@@ -186,22 +183,34 @@ fn handle_keys(keys: &ButtonInput<KeyCode>, mech: &mut Mech, mission: &mut Missi
             mech.target = Some(vis[i % vis.len()].0);
         }
     }
-    let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7];
-    for (i, k) in digits.iter().enumerate() {
-        if keys.just_pressed(*k) {
-            st.selected_sys = i;
+    // Hotbar
+    let seated = mech.pilot.in_seat();
+    if keys.just_pressed(KeyCode::Digit1) {
+        cmds.fire_rail = true;
+    }
+    if keys.just_pressed(KeyCode::Digit2) {
+        mech.weapons_free = !mech.weapons_free;
+    }
+    if keys.just_pressed(KeyCode::Digit3) {
+        cmds.ecm = true;
+    }
+    if keys.just_pressed(KeyCode::Digit4) {
+        cmds.vent = true;
+    }
+    if keys.just_pressed(KeyCode::Digit5) {
+        cmds.scram = true;
+    }
+    if keys.just_pressed(KeyCode::Digit6) && mech.overload.is_some() {
+        cmds.eject = true;
+    }
+    if keys.just_pressed(KeyCode::Digit7) {
+        if seated {
+            cmds.crawl_to = Some(crew_destination(mech, scene));
+        } else if matches!(mech.pilot, Pilot::Working { .. }) {
+            cmds.return_to_seat = true;
         }
     }
-    if mech.pilot.in_seat() {
-        let step = if keys.pressed(KeyCode::ShiftLeft) { 1.0 } else { 5.0 };
-        let s = Sys::ALL[st.selected_sys];
-        if keys.just_pressed(KeyCode::ArrowUp) {
-            mech.alloc[s.idx()] = (mech.alloc[s.idx()] + step).min(s.cap());
-        }
-        if keys.just_pressed(KeyCode::ArrowDown) {
-            mech.alloc[s.idx()] = (mech.alloc[s.idx()] - step).max(0.0);
-        }
-    }
+    let _ = st;
 }
 
 // --------------------------------------------------------------------------------------
@@ -314,7 +323,7 @@ fn polar(c: Pos2, k: f32, angle: f32, dist: f32) -> Pos2 {
 fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, scene: &Scene) {
     let inner = panel_frame(ui, rect, "TACTICAL RADAR", Some(campaign.makers[Section::Sensors.idx()]));
     let square = campaign.installed.contains(&PartId::JackalDish);
-    let size = inner.width().min(inner.height() - 170.0);
+    let size = inner.width().min(inner.height());
     let rr = Rect::from_center_size(Pos2::new(inner.center().x, inner.min.y + size / 2.0), Vec2::splat(size));
     let p = ui.painter_at(rr.expand(4.0));
     let c = rr.center();
@@ -486,46 +495,7 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
         text(&p, rr.right_top() + Vec2::new(-4.0, 2.0), Align2::RIGHT_TOP, "JACKAL FIRMWARE", mono(16.0), rgb(Maker::Jackal.accent()));
     }
 
-    // Contact list
-    let list = Rect::from_min_max(Pos2::new(inner.min.x, rr.max.y + 6.0), inner.max);
-    let lp = ui.painter_at(list);
-    lp.rect_filled(list, 0.0, PANEL_DARK);
-    let mut rows: Vec<&(Entity, Enemy)> = scene.enemies.iter().filter(|(_, e)| e.dist <= st.radar_range).collect();
-    rows.sort_by(|a, b| a.1.dist.total_cmp(&b.1.dist));
-    let mut y = list.min.y + 6.0;
-    for (ent, e) in rows.iter().take(6) {
-        let row = Rect::from_min_size(Pos2::new(list.min.x + 2.0, y), Vec2::new(list.width() - 4.0, 22.0));
-        let sel = mech.target == Some(*ent);
-        let resp = ui.interact(row, ui.id().with(("contact", ent.index_u32())), Sense::click());
-        if sel {
-            lp.rect_filled(row, 0.0, Color32::from_rgb(40, 34, 20));
-        } else if resp.hovered() {
-            lp.rect_filled(row, 0.0, Color32::from_rgb(28, 30, 34));
-        }
-        if resp.clicked() {
-            mech.target = Some(*ent);
-        }
-        let identified = e.dist <= st.id_range;
-        let col = if identified { kind_color(e.kind) } else { AMBER };
-        paint_icon(&lp, Pos2::new(row.min.x + 12.0, row.center().y), if identified { kind_icon(e.kind) } else { &ICON_UNKNOWN }, 2.0, col);
-        let name = if identified { format!("{}-{:02}", e.kind.callsign(), e.serial) } else { "????".into() };
-        let class = if identified { e.kind.name() } else { "UNKNOWN" };
-        let _ = class;
-        text(&lp, Pos2::new(row.min.x + 26.0, row.center().y), Align2::LEFT_CENTER, name, mono(19.0), col);
-        text(&lp, Pos2::new(row.min.x + 140.0, row.center().y), Align2::RIGHT_CENTER, format!("{:.0}m", e.est_dist), mono(19.0), TEXT);
-        let cov = if e.covered { ("CAM".to_string(), GREEN.gamma_multiply(0.8)) } else { (format!("±{:.0}°", e.err.to_degrees()), AMBER) };
-        text(&lp, Pos2::new(row.min.x + 196.0, row.center().y), Align2::RIGHT_CENTER, cov.0, mono(19.0), cov.1);
-        let hb = Rect::from_min_size(Pos2::new(row.min.x + 206.0, row.center().y - 5.0), Vec2::new(row.width() - 212.0, 10.0));
-        if identified {
-            seg_bar(&lp, hb, e.hp / e.max_hp, 8, col);
-        } else {
-            text(&lp, hb.center(), Align2::CENTER_CENTER, "--", mono(16.0), DIM);
-        }
-        y += 23.0;
-    }
-    if rows.is_empty() {
-        text(&lp, list.center(), Align2::CENTER_CENTER, "NO CONTACTS", mono(19.0), DIM);
-    }
+    let _ = ui;
 }
 
 // --------------------------------------------------------------------------------------
@@ -533,7 +503,7 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
 // --------------------------------------------------------------------------------------
 
 const FEED_W: f32 = 320.0;
-const FEED_H: f32 = 176.0;
+const FEED_H: f32 = 208.0;
 
 #[allow(clippy::too_many_arguments)]
 fn feed_panel(
@@ -686,7 +656,7 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
         let rel = angle_diff(angle, bearing);
         (rel.abs() < fov * 0.6).then(|| FEED_W / 2.0 + rel / (fov / 2.0) * (FEED_W / 2.0))
     };
-    let ground_y = |dist: f32| art::HORIZON as f32 + (1.0 - (dist / 1100.0).clamp(0.0, 1.0)).powf(1.6) * 60.0;
+    let ground_y = |dist: f32| art::HORIZON as f32 + (1.0 - (dist / 1100.0).clamp(0.0, 1.0)).powf(1.6) * 72.0;
 
     // Enemies, far to near
     let mut list: Vec<&(Entity, Enemy)> = scene.enemies.iter().collect();
@@ -1029,397 +999,70 @@ fn interior_view(ui: &mut Ui, p: &egui::Painter, fr: Rect, s: f32, art: &Art, me
 }
 
 // --------------------------------------------------------------------------------------
-// Weapons
-// --------------------------------------------------------------------------------------
-
-fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotCommands, campaign: &Campaign, scene: &Scene) {
-    let inner = panel_frame(ui, rect, "WEAPON STATIONS", None);
-    let gap = 8.0;
-    let cw = (inner.width() - gap * 2.0) / 3.0;
-    let cards: Vec<Rect> = (0..3).map(|i| Rect::from_min_size(Pos2::new(inner.min.x + i as f32 * (cw + gap), inner.min.y), Vec2::new(cw, inner.height()))).collect();
-    let st = mech.stats;
-    let seated = mech.pilot.in_seat();
-    let target = mech.target.and_then(|t| scene.enemies.iter().find(|(e, _)| *e == t)).map(|(_, e)| e.clone());
-    let bh = 26.0;
-
-    // --- Railgun -------------------------------------------------------------------------
-    {
-        let r = cards[0];
-        let maker = campaign.makers[Section::Railgun.idx()];
-        let dead = mech.hp[Section::Railgun.idx()] <= 0.0;
-        station_card(ui, r, "RAILGUN", maker, dead);
-        let p = ui.painter_at(r);
-        let x = r.min.x + 8.0;
-        let charge = mech.rail_charge;
-        let ready = charge >= 1.0 && !dead;
-        let lock = target.as_ref().is_some_and(|e| e.dist <= st.radar_range);
-        let radar_only = target.as_ref().is_some_and(|e| !e.covered);
-        let status = if dead {
-            ("MOUNT DESTROYED", RED)
-        } else if !seated {
-            ("NO PILOT", RED)
-        } else if st.rail_rate <= 0.0 && !ready {
-            ("NO POWER", RED)
-        } else if !ready {
-            ("CHARGING", AMBER)
-        } else if !lock {
-            ("NO LOCK", AMBER)
-        } else if radar_only {
-            ("RADAR LOCK", AMBER)
-        } else {
-            ("VISUAL LOCK", GREEN)
-        };
-        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 30.0), Align2::RIGHT_CENTER, status.0, pix(9.0), status.1);
-        text(&p, Pos2::new(x, r.min.y + 30.0), Align2::LEFT_CENTER, "CAPACITOR", pix(9.0), DIM);
-        seg_bar(&p, Rect::from_min_size(Pos2::new(x, r.min.y + 38.0), Vec2::new(r.width() - 16.0, 12.0)), charge, 20, if ready { CYAN } else { CYAN.gamma_multiply(0.6) });
-        let eta = if ready { "READY".into() } else if st.rail_rate > 0.0 { format!("{:.1}s", (1.0 - charge) / st.rail_rate) } else { "∞".into() };
-        let hitp = (0.92 * (0.5 + 0.5 * mech.eff(Section::Sensors)) - if target.as_ref().is_some_and(|e| e.kind == EnemyKind::Scout) { 0.15 } else { 0.0 })
-            * target.as_ref().map(|e| e.aim_factor()).unwrap_or(1.0);
-        let hit = if lock { format!("{:.0}% HIT", hitp * 100.0) } else { "--".into() };
-        text(&p, Pos2::new(x, r.min.y + 60.0), Align2::LEFT_CENTER, format!("{eta}  ·  +{:.0} HEAT", 22.0 + campaign.mods.rail_heat), mono(18.0), TEXT);
-        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 60.0), Align2::RIGHT_CENTER, hit, mono(18.0), if radar_only { AMBER } else { TEXT });
-        let by = r.max.y - bh - 6.0;
-        let fire = Rect::from_min_size(Pos2::new(x, by), Vec2::new(r.width() * 0.62, bh));
-        if pbutton(ui, fire, "FIRE [SPACE]", RED, seated && ready && lock && mech.scram_t <= 0.0, ready && lock).clicked() {
-            cmds.fire_rail = true;
-        }
-        let auto = Rect::from_min_max(Pos2::new(fire.max.x + 6.0, by), Pos2::new(r.max.x - 8.0, by + bh));
-        if pbutton(ui, auto, "AUTO", AMBER, !dead, mech.rail_auto).clicked() {
-            mech.rail_auto = !mech.rail_auto;
-        }
-    }
-
-    // --- Autocannon ----------------------------------------------------------------------
-    {
-        let r = cards[1];
-        let maker = campaign.makers[Section::Autocannon.idx()];
-        let dead = mech.hp[Section::Autocannon.idx()] <= 0.0;
-        station_card(ui, r, "AUTOCANNON", maker, dead);
-        let p = ui.painter_at(r);
-        let x = r.min.x + 8.0;
-        let status = if dead {
-            ("MOUNT DESTROYED", RED)
-        } else if !seated {
-            ("NO PILOT", RED)
-        } else if st.ac_dps <= 0.0 {
-            ("NO POWER", RED)
-        } else if mech.ac_firing {
-            ("FIRING", YELLOW)
-        } else if !mech.weapons_free {
-            ("SAFE", DIM)
-        } else {
-            ("TRACKING", GREEN)
-        };
-        text(&p, Pos2::new(x, r.min.y + 30.0), Align2::LEFT_CENTER, "BELT", pix(9.0), DIM);
-        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 30.0), Align2::RIGHT_CENTER, status.0, pix(9.0), status.1);
-        // Ammo belt animation
-        let belt = Rect::from_min_size(Pos2::new(x, r.min.y + 38.0), Vec2::new(r.width() - 16.0, 12.0));
-        p.rect_filled(belt, 0.0, EDGE_LO);
-        let offset = if mech.ac_firing { ((scene.t * 40.0) % 10.0) as f32 } else { 0.0 };
-        let mut bx = belt.min.x + 3.0 - offset;
-        while bx < belt.max.x - 6.0 {
-            if bx > belt.min.x {
-                let c = if dead { DIM } else { Color32::from_rgb(190, 150, 60) };
-                p.rect_filled(Rect::from_min_size(Pos2::new(bx, belt.min.y + 2.0), Vec2::new(5.0, 8.0)), 0.0, c);
-                p.rect_filled(Rect::from_min_size(Pos2::new(bx, belt.min.y + 2.0), Vec2::new(5.0, 3.0)), 0.0, c.gamma_multiply(1.3));
-            }
-            bx += 10.0;
-        }
-        let blind = target.as_ref().is_some_and(|e| !e.covered && e.dist <= AC_RANGE);
-        text(&p, Pos2::new(x, r.min.y + 60.0), Align2::LEFT_CENTER, format!("{:.0}/s{}  ·  +{:.1} HEAT", st.ac_dps * if blind { 0.5 } else { 1.0 }, if blind { " (RADAR)" } else { "" }, st.eff[Sys::Autocannon.idx()] * 0.14), mono(18.0), if blind { AMBER } else { TEXT });
-        let by = r.max.y - bh - 6.0;
-        let half = (r.width() - 22.0) / 2.0;
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x, by), Vec2::new(half, bh)), "WPN FREE", YELLOW, !dead, mech.weapons_free).clicked() {
-            mech.weapons_free = !mech.weapons_free;
-        }
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x + half + 6.0, by), Vec2::new(half, bh)), "PT DEFENCE", PURPLE, !dead, mech.point_defence).clicked() {
-            mech.point_defence = !mech.point_defence;
-        }
-    }
-
-    // --- EW & crew -----------------------------------------------------------------------
-    {
-        let r = cards[2];
-        station_card(ui, r, "EW / CREW", campaign.makers[Section::Sensors.idx()], false);
-        let p = ui.painter_at(r);
-        let x = r.min.x + 8.0;
-        text(&p, Pos2::new(x, r.min.y + 30.0), Align2::LEFT_CENTER, "ECM CAPACITOR", pix(9.0), DIM);
-        let ecm_ok = mech.ecm_cd <= 0.0 && st.eff[Sys::Sensors.idx()] >= 5.0;
-        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 30.0), Align2::RIGHT_CENTER, if ecm_ok { "READY" } else if mech.ecm_cd > 0.0 { "RECHARGE" } else { "SENS<5" }, pix(9.0), if ecm_ok { GREEN } else { AMBER });
-        seg_bar(&p, Rect::from_min_size(Pos2::new(x, r.min.y + 38.0), Vec2::new(r.width() - 16.0, 12.0)), 1.0 - mech.ecm_cd / 28.0, 14, CYAN);
-        let in_flight = scene.drones.len();
-        let on_hull = scene.boarders.len();
-        let line = format!("{in_flight} DRONES IN  ·  {on_hull} ON HULL  ·  -{:.0}u", st.parasitic);
-        text(&p, Pos2::new(x, r.min.y + 60.0), Align2::LEFT_CENTER, line, mono(18.0), if in_flight + on_hull > 0 { PURPLE } else { TEXT });
-        let by = r.max.y - bh - 6.0;
-        let half = (r.width() - 22.0) / 2.0;
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x, by), Vec2::new(half, bh)), "ECM [E]", CYAN, ecm_ok && seated, ecm_ok).clicked() {
-            cmds.ecm = true;
-        }
-        // Leave the chair: boarders first, then the sensor head if a camera is down, then the worst section.
-        let dest = scene
-            .boarders
-            .first()
-            .map(|b| b.section)
-            .or_else(|| (mech.cameras_up() < CAMERAS).then_some(Section::Sensors))
-            .or_else(|| {
-                Section::ALL
-                    .iter()
-                    .copied()
-                    .filter(|s| *s != Section::Cockpit && *s != Section::Uplink)
-                    .min_by(|a, b| mech.frac(*a).total_cmp(&mech.frac(*b)))
-            })
-            .unwrap_or(Section::Reactor);
-        let lbl = if seated { "LEAVE CHAIR" } else { "RETURN" };
-        let br = Rect::from_min_size(Pos2::new(x + half + 6.0, by), Vec2::new(half, bh));
-        let can_return = matches!(mech.pilot, Pilot::Working { .. });
-        if pbutton(ui, br, lbl, if seated { PURPLE } else { GREEN }, seated || can_return, on_hull > 0 && seated).clicked() {
-            if seated {
-                cmds.crawl_to = Some(dest);
-            } else {
-                cmds.return_to_seat = true;
-            }
-        }
-    }
-}
-
-fn station_card(ui: &Ui, r: Rect, name: &str, maker: Maker, dead: bool) {
-    let p = ui.painter();
-    let accent = if dead { RED.gamma_multiply(0.6) } else { rgb(maker.accent()) };
-    p.rect_filled(r, 0.0, PANEL_DARK);
-    p.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, EDGE_HI), StrokeKind::Inside);
-    p.rect_filled(Rect::from_min_size(r.min, Vec2::new(r.width(), 20.0)), 0.0, accent.gamma_multiply(0.18));
-    p.rect_filled(Rect::from_min_size(r.min, Vec2::new(4.0, 20.0)), 0.0, accent);
-    text(p, r.min + Vec2::new(10.0, 10.0), Align2::LEFT_CENTER, name, pix(11.0), accent);
-    text(p, Pos2::new(r.max.x - 6.0, r.min.y + 10.0), Align2::RIGHT_CENTER, maker.name(), pix(8.0), accent.gamma_multiply(0.7));
-}
-
-// --------------------------------------------------------------------------------------
-// Power routing
-// --------------------------------------------------------------------------------------
-
-fn power_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotCommands, campaign: &Campaign, scene: &Scene, ui_st: &mut CockpitUi) {
-    let inner = panel_frame(ui, rect, "REACTOR & POWER ROUTING", Some(campaign.makers[Section::Reactor.idx()]));
-    let st = mech.stats;
-    let seated = mech.pilot.in_seat();
-    let p = ui.painter_at(inner);
-
-    // --- Reactor bus bar -----------------------------------------------------------------
-    let bus = Rect::from_min_size(inner.min, Vec2::new(inner.width(), 60.0));
-    let output = campaign.mods.reactor_output;
-    text(&p, bus.min, Align2::LEFT_TOP, format!("CORE {:.0}u", output), pix(10.0), AMBER);
-    let over = st.draw > st.available;
-    text(
-        &p,
-        Pos2::new(bus.max.x, bus.min.y - 2.0),
-        Align2::RIGHT_TOP,
-        format!("DRAW {:.0} / AVAIL {:.0}", st.draw, st.available),
-        mono(20.0),
-        if st.supply < 1.0 { RED } else if over { AMBER } else { GREEN },
-    );
-    let bar = Rect::from_min_size(bus.min + Vec2::new(0.0, 20.0), Vec2::new(bus.width(), 20.0));
-    let full = output * OVERDRIVE;
-    let to_x = |v: f32| bar.min.x + (v / full).clamp(0.0, 1.0) * bar.width();
-    p.rect_filled(bar, 0.0, EDGE_LO);
-    // Stacked draw by system
-    let mut acc = 0.0;
-    for s in Sys::ALL {
-        let v = mech.alloc[s.idx()];
-        let r = Rect::from_min_max(Pos2::new(to_x(acc), bar.min.y + 2.0), Pos2::new(to_x(acc + v), bar.max.y - 2.0));
-        p.rect_filled(r, 0.0, sys_color(s).gamma_multiply(0.75));
-        acc += v;
-    }
-    // Overdrive zone hatching + parasitic + damage loss
-    let avail_x = to_x(st.available);
-    let ceil_x = to_x(st.available * OVERDRIVE);
-    let mut hx = avail_x;
-    while hx < ceil_x {
-        p.line_segment([Pos2::new(hx, bar.max.y), Pos2::new(hx + 6.0, bar.min.y)], Stroke::new(1.0, RED.gamma_multiply(0.6)));
-        hx += 6.0;
-    }
-    p.line_segment([Pos2::new(avail_x, bar.min.y - 3.0), Pos2::new(avail_x, bar.max.y + 3.0)], Stroke::new(2.0, Color32::WHITE));
-    p.line_segment([Pos2::new(ceil_x, bar.min.y - 3.0), Pos2::new(ceil_x, bar.max.y + 3.0)], Stroke::new(2.0, RED));
-    let mut note = String::new();
-    if st.parasitic > 0.0 {
-        note.push_str(&format!("PARASITIC -{:.0}  ", st.parasitic));
-    }
-    if mech.frac(Section::Reactor) < 1.0 {
-        note.push_str(&format!("CORE DMG -{:.0}  ", output * 0.5 * (1.0 - mech.frac(Section::Reactor))));
-    }
-    if st.supply < 1.0 {
-        note.push_str(&format!("BROWNOUT {:.0}%", st.supply * 100.0));
-    } else if over {
-        note.push_str(&format!("OVERDRIVE +{:.0}u → +{:.1} heat/s", st.draw - st.available, (st.draw - st.available) * OVERDRIVE_HEAT));
-    }
-    text(&p, bar.left_bottom() + Vec2::new(0.0, 3.0), Align2::LEFT_TOP, note, mono(17.0), if over || st.parasitic > 0.0 { AMBER } else { DIM });
-
-    // --- Faders ---------------------------------------------------------------------------
-    let fz = Rect::from_min_max(Pos2::new(inner.min.x, bus.max.y + 6.0), Pos2::new(inner.max.x - 118.0, inner.max.y - 84.0));
-    let n = Sys::ALL.len() as f32;
-    let fw = fz.width() / n;
-    let col_top = fz.min.y + 22.0;
-    let col_bot = fz.max.y - 62.0;
-    let unit_h = (col_bot - col_top) / 40.0;
-    for (i, s) in Sys::ALL.iter().copied().enumerate() {
-        let cx = fz.min.x + fw * (i as f32 + 0.5);
-        let colw = (fw - 18.0).min(40.0);
-        let cap = s.cap();
-        let slot = Rect::from_min_max(Pos2::new(cx - colw / 2.0, col_bot - cap * unit_h), Pos2::new(cx + colw / 2.0, col_bot));
-        let resp = ui.interact(slot.expand2(Vec2::new(4.0, 8.0)), ui.id().with(("fader", i)), Sense::click_and_drag());
-        if (resp.dragged() || resp.clicked()) && seated
-            && let Some(pos) = resp.interact_pointer_pos() {
-                let v = ((col_bot - pos.y) / unit_h).round().clamp(0.0, cap);
-                mech.alloc[s.idx()] = v;
-                ui_st.selected_sys = i;
-            }
-        let col = sys_color(s);
-        let pp = ui.painter();
-        pp.rect_filled(slot.expand(2.0), 0.0, EDGE_LO);
-        let seg_u = 2.5;
-        let segs = (cap / seg_u) as usize;
-        let val = mech.alloc[s.idx()];
-        let effv = st.eff[s.idx()];
-        for k in 0..segs {
-            let y1 = col_bot - k as f32 * seg_u * unit_h;
-            let r = Rect::from_min_max(Pos2::new(slot.min.x + 2.0, y1 - seg_u * unit_h + 1.5), Pos2::new(slot.max.x - 2.0, y1 - 0.5));
-            let lo = k as f32 * seg_u;
-            let c = if lo < effv - 0.01 {
-                col
-            } else if lo < val - 0.01 {
-                RED.gamma_multiply(0.5)
-            } else {
-                col.gamma_multiply(0.08)
-            };
-            pp.rect_filled(r, 0.0, c);
-        }
-        // Knob
-        let ky = col_bot - val * unit_h;
-        let knob = Rect::from_center_size(Pos2::new(cx, ky), Vec2::new(colw + 10.0, 7.0));
-        pp.rect_filled(knob, 0.0, Color32::from_rgb(200, 200, 190));
-        pp.rect_filled(Rect::from_min_size(knob.min + Vec2::new(0.0, 5.0), Vec2::new(knob.width(), 2.0)), 0.0, Color32::from_rgb(90, 90, 86));
-        if ui_st.selected_sys == i {
-            pp.rect_stroke(slot.expand(5.0), CornerRadius::ZERO, Stroke::new(1.0, AMBER), StrokeKind::Outside);
-        }
-        text(pp, Pos2::new(cx, fz.min.y), Align2::CENTER_TOP, format!("{:.0}", val), mono(24.0), col);
-        text(pp, Pos2::new(cx, col_bot + 6.0), Align2::CENTER_TOP, s.name(), pix(10.0), col);
-        let readout = match s {
-            Sys::Locomotion => format!("EVA {:.0}%", st.evasion * 100.0),
-            Sys::Sensors => format!("{:.0}m", st.radar_range),
-            Sys::Railgun => if st.rail_rate > 0.0 { format!("{:.1}s", 1.0 / st.rail_rate) } else { "--".into() },
-            Sys::Autocannon => format!("{:.0}dps", st.ac_dps),
-            Sys::Shields => format!("{:.0}", st.shield_cap),
-            Sys::Repair => if mech.repair_target == Section::Uplink { "UPLNK".to_string() } else { format!("{:.1}/s", st.repair_rate) },
-            Sys::Cooling => format!("-{:.1}", st.cooling),
-        };
-        text(pp, Pos2::new(cx, col_bot + 22.0), Align2::CENTER_TOP, readout, mono(16.0), DIM);
-        // +/- nudge buttons
-        let bw = (fw - 8.0) / 2.0;
-        let by = col_bot + 40.0;
-        if pbutton(ui, Rect::from_min_size(Pos2::new(cx - bw - 1.0, by), Vec2::new(bw, 18.0)), "-", col, seated, false).clicked() {
-            mech.alloc[s.idx()] = (val - 5.0).max(0.0);
-            ui_st.selected_sys = i;
-        }
-        if pbutton(ui, Rect::from_min_size(Pos2::new(cx + 1.0, by), Vec2::new(bw, 18.0)), "+", col, seated, false).clicked() {
-            mech.alloc[s.idx()] = (val + 5.0).min(cap);
-            ui_st.selected_sys = i;
-        }
-        if resp.hovered() {
-            resp.on_hover_text(s.long_name());
-        }
-    }
-
-    // --- Heat & shields -------------------------------------------------------------------
-    let hz = Rect::from_min_max(Pos2::new(fz.max.x + 10.0, fz.min.y), Pos2::new(inner.max.x, fz.max.y));
-    let pp = ui.painter_at(hz.expand(2.0));
-    let therm = Rect::from_min_max(Pos2::new(hz.min.x + 4.0, hz.min.y + 22.0), Pos2::new(hz.min.x + 46.0, hz.max.y - 40.0));
-    text(&pp, Pos2::new(therm.center().x, hz.min.y), Align2::CENTER_TOP, "HEAT", pix(10.0), RED);
-    pp.rect_filled(therm, 0.0, EDGE_LO);
-    let hy = |v: f32| therm.max.y - (v / HEAT_MAX) * therm.height();
-    pp.rect_filled(Rect::from_min_max(Pos2::new(therm.min.x, hy(HEAT_MAX)), Pos2::new(therm.max.x, hy(HEAT_CRIT))), 0.0, Color32::from_rgb(60, 14, 12));
-    let segs = 26;
-    for k in 0..segs {
-        let v0 = k as f32 / segs as f32 * HEAT_MAX;
-        let r = Rect::from_min_max(Pos2::new(therm.min.x + 3.0, hy(v0 + HEAT_MAX / segs as f32) + 1.0), Pos2::new(therm.max.x - 3.0, hy(v0) - 1.0));
-        let c = if v0 >= 100.0 { RED } else if v0 >= 80.0 { Color32::from_rgb(255, 120, 40) } else if v0 >= 50.0 { AMBER } else { GREEN };
-        pp.rect_filled(r, 0.0, if v0 < mech.heat { c } else { c.gamma_multiply(0.1) });
-    }
-    for mark in [50.0, 80.0, 100.0] {
-        pp.line_segment([Pos2::new(therm.max.x, hy(mark)), Pos2::new(therm.max.x + 6.0, hy(mark))], Stroke::new(2.0, DIM));
-        text(&pp, Pos2::new(therm.max.x + 8.0, hy(mark)), Align2::LEFT_CENTER, format!("{mark:.0}"), mono(15.0), DIM);
-    }
-    let net = st.heat_in - st.heat_out;
-    text(&pp, Pos2::new(therm.center().x, therm.max.y + 4.0), Align2::CENTER_TOP, format!("{:.0}", mech.heat), mono(26.0), if mech.heat >= 80.0 { RED } else { TEXT });
-    text(&pp, Pos2::new(therm.center().x + 2.0, therm.max.y + 22.0), Align2::CENTER_TOP, format!("{:+.1}/s", net), mono(16.0), if net > 0.0 { AMBER } else { GREEN });
-    // Shield column
-    let sh = Rect::from_min_max(Pos2::new(hz.max.x - 38.0, therm.min.y), Pos2::new(hz.max.x - 4.0, therm.max.y));
-    text(&pp, Pos2::new(sh.center().x, hz.min.y), Align2::CENTER_TOP, "SHLD", pix(10.0), sys_color(Sys::Shields));
-    pp.rect_filled(sh, 0.0, EDGE_LO);
-    let frac = if st.shield_cap > 0.0 { mech.shield / st.shield_cap } else { 0.0 };
-    let fill = Rect::from_min_max(Pos2::new(sh.min.x + 3.0, sh.max.y - frac * sh.height() + 3.0), sh.max - Vec2::new(3.0, 3.0));
-    pp.rect_filled(fill, 0.0, if mech.shields_down_t > 0.0 { RED } else { sys_color(Sys::Shields) });
-    text(&pp, Pos2::new(sh.center().x, sh.max.y + 4.0), Align2::CENTER_TOP, format!("{:.0}", mech.shield), mono(22.0), sys_color(Sys::Shields));
-
-    // --- Emergency row --------------------------------------------------------------------
-    let er = Rect::from_min_max(Pos2::new(inner.min.x, inner.max.y - 76.0), inner.max);
-    let bw = (er.width() - 4.0 * 6.0) / 5.0;
-    let b = |i: usize, h: f32, y: f32| Rect::from_min_size(Pos2::new(er.min.x + i as f32 * (bw + 6.0), er.min.y + y), Vec2::new(bw, h));
-    let vent_lbl = if mech.vent_cd > 0.0 { format!("VENT {:.0}s", mech.vent_cd) } else { "VENT [V]".into() };
-    if pbutton(ui, b(0, 36.0, 0.0), &vent_lbl, CYAN, mech.vent_cd <= 0.0 && seated, mech.vent_t > 0.0).clicked() {
-        cmds.vent = true;
-    }
-    let scram_lbl = if mech.scram_cd > 0.0 { format!("SCRAM {:.0}s", mech.scram_cd) } else { "SCRAM [X]".into() };
-    if pbutton(ui, b(1, 36.0, 0.0), &scram_lbl, AMBER, mech.scram_cd <= 0.0 && seated, mech.scram_t > 0.0).clicked() {
-        cmds.scram = true;
-    }
-    // Routing presets
-    let presets: [(&str, [f32; 7]); 2] = [("ASSAULT", [5.0, 10.0, 40.0, 15.0, 10.0, 0.0, 25.0]), ("RESTORE", [10.0, 10.0, 10.0, 15.0, 20.0, 25.0, 15.0])];
-    for (k, (name, values)) in presets.iter().enumerate() {
-        if pbutton(ui, b(2 + k, 36.0, 0.0), name, GREEN, seated, false).clicked() {
-            mech.alloc = *values;
-        }
-    }
-    let eject_on = mech.overload.is_some();
-    if pbutton(ui, b(4, 36.0, 0.0), "EJECT", RED, eject_on, eject_on && (scene.t * 3.0).fract() < 0.5).clicked() {
-        cmds.eject = true;
-    }
-    if let Some(t) = mech.overload {
-        let big = Rect::from_center_size(fz.center(), Vec2::new(fz.width() - 20.0, 70.0));
-        let pp = ui.painter();
-        pp.rect_filled(big, 0.0, Color32::from_black_alpha(220));
-        pp.rect_stroke(big, CornerRadius::ZERO, Stroke::new(3.0, RED), StrokeKind::Inside);
-        text(pp, big.center() - Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, "REACTOR OVERLOAD", pix(16.0), RED);
-        text(pp, big.center() + Vec2::new(0.0, 16.0), Align2::CENTER_CENTER, format!("CONTAINMENT FAILURE IN {:.1}s", t.max(0.0)), mono(22.0), if (scene.t * 4.0).fract() < 0.5 { Color32::WHITE } else { RED });
-    }
-}
-
-// --------------------------------------------------------------------------------------
-// Hull diagram
+// Hull & core: the damage diagram is the readout. Colour is health, a flash is a hit,
+// the halo is the shield, ticks are boarders. Click a section to send repair drones.
 // --------------------------------------------------------------------------------------
 
 fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut PilotCommands, campaign: &Campaign, scene: &Scene) {
-    let inner = panel_frame(ui, rect, "DAMAGE CONTROL", Some(campaign.makers[Section::Cockpit.idx()]));
-    let s = ((inner.height() - 4.0) / art::HULL_H as f32).floor().min(4.0);
-    let dr = Rect::from_min_size(inner.min + Vec2::new(0.0, 2.0), Vec2::new(art::HULL_W as f32 * s, art::HULL_H as f32 * s));
-    let p = ui.painter_at(dr.expand(4.0));
-    p.rect_filled(dr.expand(3.0), 0.0, Color32::from_rgb(8, 14, 18));
-    // blueprint grid
-    let mut gx = dr.min.x;
-    while gx < dr.max.x {
-        p.line_segment([Pos2::new(gx, dr.min.y), Pos2::new(gx, dr.max.y)], Stroke::new(1.0, Color32::from_rgb(16, 30, 38)));
+    let inner = panel_frame(ui, rect, "HULL & CORE", Some(campaign.makers[Section::Cockpit.idx()]));
+    let s = ((inner.width() - 24.0) / art::HULL_W as f32).floor().min(5.0);
+    let dr = Rect::from_min_size(
+        Pos2::new(inner.center().x - art::HULL_W as f32 * s / 2.0, inner.min.y + 14.0),
+        Vec2::new(art::HULL_W as f32 * s, art::HULL_H as f32 * s),
+    );
+    let bg = dr.expand(12.0);
+    let p = ui.painter_at(bg);
+    p.rect_filled(bg, 0.0, Color32::from_rgb(8, 14, 18));
+    let mut gx = bg.min.x;
+    while gx < bg.max.x {
+        p.line_segment([Pos2::new(gx, bg.min.y), Pos2::new(gx, bg.max.y)], Stroke::new(1.0, Color32::from_rgb(16, 30, 38)));
         gx += 4.0 * s;
     }
-    let mut gy = dr.min.y;
-    while gy < dr.max.y {
-        p.line_segment([Pos2::new(dr.min.x, gy), Pos2::new(dr.max.x, gy)], Stroke::new(1.0, Color32::from_rgb(16, 30, 38)));
+    let mut gy = bg.min.y;
+    while gy < bg.max.y {
+        p.line_segment([Pos2::new(bg.min.x, gy), Pos2::new(bg.max.x, gy)], Stroke::new(1.0, Color32::from_rgb(16, 30, 38)));
         gy += 4.0 * s;
     }
     let t = scene.t;
+    let st = mech.stats;
     let hover_pos = ui.ctx().pointer_hover_pos();
     let mut hovered: Option<Section> = None;
     let map = &art.hull;
     let at = |x: i32, y: i32| -> u8 {
         if x < 0 || y < 0 || x >= art::HULL_W as i32 || y >= art::HULL_H as i32 { 254 } else { map[y as usize * art::HULL_W + x as usize] }
     };
+    let cell = |x: i32, y: i32| Rect::from_min_size(dr.min + Vec2::new(x as f32 * s, y as f32 * s), Vec2::splat(s));
+
+    // Shield halo: a two-pixel aura around the silhouette, bright when charged.
+    let shield_frac = if st.shield_cap > 0.0 { (mech.shield / st.shield_cap).clamp(0.0, 1.0) } else { 0.0 };
+    let down = mech.shields_down_t > 0.0;
+    if shield_frac > 0.02 || down {
+        let halo = if down { RED } else { Color32::from_rgb(110, 150, 255) };
+        for y in -2..(art::HULL_H as i32 + 2) {
+            for x in -2..(art::HULL_W as i32 + 2) {
+                if at(x, y) != 254 {
+                    continue;
+                }
+                let mut best = 3;
+                for dy in -2..=2i32 {
+                    for dx in -2..=2i32 {
+                        if at(x + dx, y + dy) != 254 {
+                            best = best.min(dx.abs().max(dy.abs()));
+                        }
+                    }
+                }
+                if best <= 2 {
+                    let shimmer = (((x + y) as f64 * 0.7 + t * 6.0).sin() * 0.5 + 0.5) as f32;
+                    let base = if best == 1 { 0.7 } else { 0.3 };
+                    let a = if down { 0.4 * ((t * 8.0).fract() < 0.5) as i32 as f32 } else { base * (0.4 + 0.6 * shield_frac) * (0.7 + 0.3 * shimmer) };
+                    if a > 0.0 {
+                        p.rect_filled(cell(x, y), 0.0, halo.gamma_multiply(a * 0.6));
+                    }
+                }
+            }
+        }
+    }
+
     let mut centroid = [(0.0f32, 0.0f32, 0u32); 10];
     for y in 0..art::HULL_H as i32 {
         for x in 0..art::HULL_W as i32 {
@@ -1429,7 +1072,7 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
             }
             let edge = at(x - 1, y) != v || at(x + 1, y) != v || at(x, y - 1) != v || at(x, y + 1) != v;
             let hi = at(x, y - 1) != v || at(x - 1, y) != v;
-            let r = Rect::from_min_size(dr.min + Vec2::new(x as f32 * s, y as f32 * s), Vec2::splat(s));
+            let r = cell(x, y);
             let mut col = if v == 255 {
                 Color32::from_rgb(54, 60, 68)
             } else {
@@ -1449,12 +1092,19 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
                 if f <= 0.0 && sec != Section::Uplink && (t * 2.0).fract() < 0.5 {
                     c = Color32::from_rgb(20, 10, 10);
                 }
-                if sec == mech.repair_target && (t * 2.0).fract() < 0.5 {
-                    c = c.gamma_multiply(1.3);
-                }
                 // Crack pattern on damaged parts
                 if sec != Section::Uplink && f < 0.6 && hash2(x, y, 4).is_multiple_of(7) {
                     c = c.gamma_multiply(0.4);
+                }
+                // A hit lights the section up and fades.
+                let flash = mech.hit_t[sec.idx()];
+                if flash > 0.0 {
+                    let k = flash * flash;
+                    c = Color32::from_rgb(
+                        (c.r() as f32 + (255.0 - c.r() as f32) * k) as u8,
+                        (c.g() as f32 + (240.0 - c.g() as f32) * k * 0.8) as u8,
+                        (c.b() as f32 + (200.0 - c.b() as f32) * k * 0.6) as u8,
+                    );
                 }
                 c
             };
@@ -1475,18 +1125,32 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
         let c = centroid[sec.idx()];
         dr.min + Vec2::new((c.0 / c.2.max(1) as f32 + 0.5) * s, (c.1 / c.2.max(1) as f32 + 0.5) * s)
     };
-    // Boarders + incoming markers
+    // Repair drones: a blinking outline around their target.
+    let rt = mech.repair_target;
+    if (t * 2.0).fract() < 0.6 {
+        for y in 0..art::HULL_H as i32 {
+            for x in 0..art::HULL_W as i32 {
+                let v = at(x, y);
+                if v == rt as u8 {
+                    let outside = at(x - 1, y) != v || at(x + 1, y) != v || at(x, y - 1) != v || at(x, y + 1) != v;
+                    if outside {
+                        p.rect_stroke(cell(x, y), CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(240, 130, 60)), StrokeKind::Inside);
+                    }
+                }
+            }
+        }
+    }
+    // Boarders, incoming shells, the pilot
     for sec in Section::ALL {
         let n = scene.boarders_on(sec);
         for i in 0..n {
-            let off = Vec2::new((i as f32 - (n as f32 - 1.0) / 2.0) * 10.0, 0.0);
-            if (t * 5.0 + i as f64).fract() < 0.75 {
-                art.sprites.tick.paint(&p, cen(sec) + off - Vec2::new(5.0, 4.0), 1.0, 0.0, None, false);
-            }
+            let off = Vec2::new((i as f32 - (n as f32 - 1.0) / 2.0) * 12.0, 0.0);
+            let wig = ((t * 6.0 + i as f64).sin() as f32).round();
+            art.sprites.tick.paint(&p, cen(sec) + off - Vec2::new(6.0, 5.0 + wig), 1.0, 0.0, None, i % 2 == 1);
         }
         if let Some(sh) = scene.shell_on(sec) {
             let c = cen(sec);
-            let rr = 6.0 + (1.0 - sh.t / sh.flight) * 12.0;
+            let rr = 6.0 + (1.0 - sh.t / sh.flight) * 14.0;
             if (t * 6.0).fract() < 0.6 {
                 p.circle_stroke(c, rr, Stroke::new(2.0, RED));
                 p.line_segment([c - Vec2::new(rr + 3.0, 0.0), c + Vec2::new(rr + 3.0, 0.0)], Stroke::new(1.0, RED));
@@ -1495,98 +1159,238 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
         }
     }
     if let Pilot::Working { at, .. } | Pilot::Crawling { to: at, .. } = mech.pilot {
-        art.sprites.pilot.paint(&p, cen(at) - Vec2::new(4.0, 6.0), 1.0, 0.0, None, false);
+        art.sprites.pilot.paint(&p, cen(at) - Vec2::new(5.0, 8.0), 1.0, 0.0, None, false);
     }
     let dresp = ui.interact(dr, ui.id().with("hulldiag"), Sense::click());
     if let Some(h) = hovered {
         if dresp.clicked() {
             mech.repair_target = h;
         }
-        dresp.on_hover_text(format!("{} — click to send repair drones", h.name()));
+        let f = if h == Section::Uplink { mech.uplink() } else { mech.frac(h) * 100.0 };
+        dresp.on_hover_text(format!("{} {:.0}% — click: repair drones here", h.name(), f));
+    }
+    let lp = ui.painter_at(inner);
+    text(&lp, Pos2::new(bg.min.x, bg.max.y + 4.0), Align2::LEFT_TOP, format!("DRONES → {}", rt.short()), mono(16.0), Color32::from_rgb(240, 130, 60));
+    if mech.cameras_up() < CAMERAS {
+        text(&lp, Pos2::new(bg.max.x, bg.max.y + 4.0), Align2::RIGHT_TOP, format!("CAM {}/{}", mech.cameras_up(), CAMERAS), mono(16.0), AMBER);
     }
 
-    // --- Section list ---------------------------------------------------------------------
-    let lr = Rect::from_min_max(Pos2::new(dr.max.x + 10.0, inner.min.y), inner.max);
-    let rows: [Section; 10] = [
-        Section::Uplink,
-        Section::Reactor,
-        Section::Cockpit,
-        Section::Sensors,
-        Section::Coolant,
-        Section::ShieldGen,
-        Section::Railgun,
-        Section::Autocannon,
-        Section::LeftLeg,
-        Section::RightLeg,
-    ];
-    let rh = (lr.height() / rows.len() as f32).min(20.0);
-    for (i, sec) in rows.iter().copied().enumerate() {
-        let row = Rect::from_min_size(Pos2::new(lr.min.x, lr.min.y + i as f32 * rh), Vec2::new(lr.width(), rh - 1.0));
-        let resp = ui.interact(row, ui.id().with(("hrow", i)), Sense::click());
-        let pp = ui.painter();
-        let is_rt = mech.repair_target == sec;
-        if is_rt {
-            pp.rect_filled(row, 0.0, Color32::from_rgb(48, 34, 18));
-        } else if resp.hovered() {
-            pp.rect_filled(row, 0.0, Color32::from_rgb(30, 32, 36));
-        }
-        if resp.clicked() {
-            mech.repair_target = sec;
-        }
-        let (f, maxf) = if sec == Section::Uplink { (mech.uplink() / 100.0, 1.0) } else { (mech.hp[sec.idx()] / 100.0, mech.max_hp[sec.idx()] / 100.0) };
-        let c = if sec == Section::Uplink { CYAN } else { health_color(mech.frac(sec)) };
-        text(pp, row.left_center() + Vec2::new(2.0, 0.0), Align2::LEFT_CENTER, if is_rt { "▶" } else { " " }, mono(16.0), AMBER);
-        text(pp, row.left_center() + Vec2::new(14.0, 0.0), Align2::LEFT_CENTER, sec.short(), pix(9.0), c);
-        let bar = Rect::from_min_size(Pos2::new(row.min.x + 66.0, row.center().y - 4.0), Vec2::new(row.width() - 140.0, 8.0));
-        pp.rect_filled(bar, 0.0, EDGE_LO);
-        pp.rect_filled(Rect::from_min_size(bar.min, Vec2::new(bar.width() * f.clamp(0.0, 1.2) / 1.2, bar.height())), 0.0, c);
-        if maxf < 1.0 {
-            // Scarred capacity: permanently lost
-            let sx = bar.min.x + bar.width() * maxf / 1.2;
-            let ex = bar.min.x + bar.width() / 1.2;
-            let mut hx = sx;
-            while hx < ex {
-                pp.line_segment([Pos2::new(hx, bar.max.y), Pos2::new((hx + 3.0).min(ex), bar.min.y)], Stroke::new(1.0, RED.gamma_multiply(0.7)));
-                hx += 3.0;
-            }
-        }
-        let mut tag = format!("{:3.0}%", f * 100.0);
-        let nb = scene.boarders_on(sec);
-        if nb > 0 {
-            tag = format!("{tag} T{nb}");
-        }
-        text(pp, Pos2::new(row.max.x - 30.0, row.center().y), Align2::RIGHT_CENTER, tag, mono(17.0), if nb > 0 { PURPLE } else { TEXT });
-        if sec != Section::Cockpit && resp.hovered() {
-            let go = Rect::from_min_size(Pos2::new(row.max.x - 26.0, row.min.y + 1.0), Vec2::new(26.0, rh - 3.0));
-            if pbutton(ui, go, "GO", PURPLE, mech.pilot.in_seat(), false).on_hover_text("Leave the chair and crawl here").clicked() {
-                cmds.crawl_to = Some(sec);
-            }
-        }
+    // --- Core gauges --------------------------------------------------------------------------
+    let gz = Rect::from_min_max(Pos2::new(inner.min.x, bg.max.y + 26.0), inner.max);
+    let pp = ui.painter_at(gz);
+    let therm = Rect::from_min_max(Pos2::new(gz.min.x + 14.0, gz.min.y + 18.0), Pos2::new(gz.min.x + 60.0, gz.max.y - 46.0));
+    text(&pp, Pos2::new(therm.center().x, gz.min.y), Align2::CENTER_TOP, "HEAT", pix(10.0), RED);
+    pp.rect_filled(therm, 0.0, EDGE_LO);
+    let hy = |v: f32| therm.max.y - (v / HEAT_MAX) * therm.height();
+    pp.rect_filled(Rect::from_min_max(Pos2::new(therm.min.x, hy(HEAT_MAX)), Pos2::new(therm.max.x, hy(HEAT_CRIT))), 0.0, Color32::from_rgb(60, 14, 12));
+    let segs = 26;
+    for k in 0..segs {
+        let v0 = k as f32 / segs as f32 * HEAT_MAX;
+        let r = Rect::from_min_max(Pos2::new(therm.min.x + 3.0, hy(v0 + HEAT_MAX / segs as f32) + 1.0), Pos2::new(therm.max.x - 3.0, hy(v0) - 1.0));
+        let c = if v0 >= 100.0 { RED } else if v0 >= 80.0 { Color32::from_rgb(255, 120, 40) } else if v0 >= 50.0 { AMBER } else { GREEN };
+        pp.rect_filled(r, 0.0, if v0 < mech.heat { c } else { c.gamma_multiply(0.1) });
     }
-    let _ = (PI, campaign);
+    for mark in [50.0, 80.0, 100.0] {
+        pp.line_segment([Pos2::new(therm.max.x, hy(mark)), Pos2::new(therm.max.x + 6.0, hy(mark))], Stroke::new(2.0, DIM));
+        text(&pp, Pos2::new(therm.max.x + 8.0, hy(mark)), Align2::LEFT_CENTER, format!("{mark:.0}"), mono(15.0), DIM);
+    }
+    let net = st.heat_in - st.heat_out;
+    text(&pp, Pos2::new(therm.center().x, therm.max.y + 4.0), Align2::CENTER_TOP, format!("{:.0}", mech.heat), mono(28.0), if mech.heat >= 80.0 { RED } else { TEXT });
+    text(&pp, Pos2::new(therm.center().x + 2.0, therm.max.y + 26.0), Align2::CENTER_TOP, format!("{:+.1}/s", net), mono(16.0), if net > 0.0 { AMBER } else { GREEN });
+    // Shield column
+    let sh = Rect::from_min_max(Pos2::new(gz.max.x - 56.0, therm.min.y), Pos2::new(gz.max.x - 14.0, therm.max.y));
+    text(&pp, Pos2::new(sh.center().x, gz.min.y), Align2::CENTER_TOP, "SHIELD", pix(10.0), Color32::from_rgb(110, 150, 255));
+    pp.rect_filled(sh, 0.0, EDGE_LO);
+    let fill = Rect::from_min_max(Pos2::new(sh.min.x + 3.0, sh.max.y - shield_frac * (sh.height() - 6.0) - 3.0), sh.max - Vec2::new(3.0, 3.0));
+    if st.shield_cap <= 0.0 {
+        text(&pp, sh.center(), Align2::CENTER_CENTER, "NOT\nWIRED", mono(16.0), DIM);
+    } else {
+        pp.rect_filled(fill, 0.0, if down { RED } else { Color32::from_rgb(110, 150, 255) });
+    }
+    text(&pp, Pos2::new(sh.center().x, sh.max.y + 4.0), Align2::CENTER_TOP, format!("{:.0}", mech.shield), mono(24.0), Color32::from_rgb(110, 150, 255));
+    // Reactor summary between the gauges
+    let mid = Pos2::new((therm.max.x + sh.min.x) / 2.0 + 10.0, therm.center().y);
+    let draw_col = if st.supply < 1.0 { RED } else if st.parasitic > 0.0 { AMBER } else { DIM };
+    text(&pp, mid - Vec2::new(0.0, 22.0), Align2::CENTER_CENTER, "CORE", pix(9.0), DIM);
+    text(&pp, mid - Vec2::new(0.0, 4.0), Align2::CENTER_CENTER, format!("{:.0}/{:.0}", st.draw, st.available), mono(20.0), draw_col);
+    if st.parasitic > 0.0 {
+        text(&pp, mid + Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, format!("-{:.0} TICKS", st.parasitic), mono(16.0), PURPLE);
+    } else if st.supply < 1.0 {
+        text(&pp, mid + Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, "BROWNOUT", mono(16.0), RED);
+    }
+    let _ = cmds;
+}
+
+/// Big red countdown over the feed while the reactor is cooking off.
+fn overload_banner(ui: &mut Ui, feed: Rect, mech: &Mech, scene: &Scene) {
+    let Some(t) = mech.overload else { return };
+    let big = Rect::from_center_size(Pos2::new(feed.center().x, feed.min.y + 110.0), Vec2::new(460.0, 72.0));
+    let p = ui.painter();
+    p.rect_filled(big, 0.0, Color32::from_black_alpha(220));
+    p.rect_stroke(big, CornerRadius::ZERO, Stroke::new(3.0, RED), StrokeKind::Inside);
+    text(p, big.center() - Vec2::new(0.0, 15.0), Align2::CENTER_CENTER, "REACTOR OVERLOAD", pix(16.0), RED);
+    text(p, big.center() + Vec2::new(0.0, 16.0), Align2::CENTER_CENTER, format!("CONTAINMENT IN {:.1}s", t.max(0.0)), mono(26.0), if (scene.t * 4.0).fract() < 0.5 { Color32::WHITE } else { RED });
 }
 
 // --------------------------------------------------------------------------------------
-// Radio
+// Hotbar: every action the pilot has, as a miniature with its own charge.
+// --------------------------------------------------------------------------------------
+
+/// Where the pilot goes when they leave the chair: boarders first, then a dead camera,
+/// then the worst section.
+pub fn crew_destination(mech: &Mech, scene: &Scene) -> Section {
+    scene
+        .boarders
+        .first()
+        .map(|b| b.section)
+        .or_else(|| (mech.cameras_up() < CAMERAS).then_some(Section::Sensors))
+        .or_else(|| {
+            Section::ALL
+                .iter()
+                .copied()
+                .filter(|s| *s != Section::Cockpit && *s != Section::Uplink)
+                .min_by(|a, b| mech.frac(*a).total_cmp(&mech.frac(*b)))
+        })
+        .unwrap_or(Section::Reactor)
+}
+
+struct Slot {
+    name: &'static str,
+    key: &'static str,
+    color: Color32,
+    /// 0..1 fill of the charge bar.
+    charge: f32,
+    status: String,
+    status_col: Color32,
+    enabled: bool,
+    lit: bool,
+}
+
+fn hotbar_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut PilotCommands, campaign: &Campaign, scene: &Scene) {
+    let inner = panel_frame(ui, rect, "STATIONS", None);
+    let st = mech.stats;
+    let seated = mech.pilot.in_seat();
+    let target = mech.target.and_then(|t| scene.enemies.iter().find(|(e, _)| *e == t)).map(|(_, e)| e.clone());
+    let rail_dead = mech.hp[Section::Railgun.idx()] <= 0.0;
+    let ac_dead = mech.hp[Section::Autocannon.idx()] <= 0.0;
+    let rail_ready = mech.rail_charge >= 1.0 && !rail_dead;
+    let lock = target.as_ref().is_some_and(|e| e.dist <= st.radar_range);
+    let radar_only = target.as_ref().is_some_and(|e| !e.covered);
+    let hitp = (0.92 * (0.5 + 0.5 * mech.eff(Section::Sensors)) - if target.as_ref().is_some_and(|e| e.kind == EnemyKind::Scout) { 0.15 } else { 0.0 })
+        * target.as_ref().map(|e| e.aim_factor()).unwrap_or(1.0);
+    let rail_status = if rail_dead {
+        ("DESTROYED".to_string(), RED)
+    } else if !campaign.matrix[Sys::Railgun.idx()] {
+        ("NOT WIRED".into(), DIM)
+    } else if !rail_ready {
+        (if st.rail_rate > 0.0 { format!("{:.1}s", (1.0 - mech.rail_charge) / st.rail_rate) } else { "NO POWER".into() }, AMBER)
+    } else if !lock {
+        ("NO LOCK".into(), AMBER)
+    } else if radar_only {
+        (format!("RADAR {:.0}%", hitp * 100.0), AMBER)
+    } else {
+        (format!("{:.0}% HIT", hitp * 100.0), GREEN)
+    };
+    let ac_status = if ac_dead {
+        ("DESTROYED".to_string(), RED)
+    } else if !campaign.matrix[Sys::Autocannon.idx()] {
+        ("NOT WIRED".into(), DIM)
+    } else if mech.ac_firing {
+        (format!("{:.0}/s", st.ac_dps), YELLOW)
+    } else if mech.weapons_free {
+        ("TRACKING".into(), GREEN)
+    } else {
+        ("SAFE".into(), DIM)
+    };
+    let ecm_ok = mech.ecm_cd <= 0.0 && st.eff[Sys::Sensors.idx()] >= 5.0;
+    let boarders = scene.boarders.len();
+    let crew_status = match mech.pilot {
+        Pilot::Seat => (if boarders > 0 { format!("{boarders} BOARDERS") } else { "IN CHAIR".into() }, if boarders > 0 { PURPLE } else { DIM }),
+        Pilot::Crawling { .. } => ("CRAWLING".into(), AMBER),
+        Pilot::Working { at, .. } => (at.short().to_string(), AMBER),
+        Pilot::Returning { .. } => ("RETURNING".into(), AMBER),
+    };
+    let overload = mech.overload.is_some();
+    let slots = [
+        Slot { name: "RAIL", key: "1", color: CYAN, charge: mech.rail_charge, status: rail_status.0, status_col: rail_status.1, enabled: seated && rail_ready && lock && mech.scram_t <= 0.0, lit: rail_ready && lock },
+        Slot { name: "A/C", key: "2", color: YELLOW, charge: if mech.ac_firing { ((scene.t * 6.0).fract()) as f32 } else { 1.0 }, status: ac_status.0, status_col: ac_status.1, enabled: !ac_dead && campaign.matrix[Sys::Autocannon.idx()], lit: mech.weapons_free && !ac_dead },
+        Slot { name: "ECM", key: "3", color: CYAN, charge: 1.0 - mech.ecm_cd / 28.0, status: if ecm_ok { "READY".into() } else if mech.ecm_cd > 0.0 { format!("{:.0}s", mech.ecm_cd) } else { "NO SENSORS".into() }, status_col: if ecm_ok { GREEN } else { DIM }, enabled: ecm_ok && seated, lit: ecm_ok },
+        Slot { name: "VENT", key: "4", color: Color32::from_rgb(150, 230, 255), charge: 1.0 - mech.vent_cd / 25.0, status: if mech.vent_t > 0.0 { "VENTING".into() } else if mech.vent_cd > 0.0 { format!("{:.0}s", mech.vent_cd) } else { "-20 HEAT/s".into() }, status_col: if mech.vent_cd <= 0.0 { GREEN } else { DIM }, enabled: mech.vent_cd <= 0.0 && seated, lit: mech.vent_t > 0.0 },
+        Slot { name: "SCRAM", key: "5", color: AMBER, charge: 1.0 - mech.scram_cd / 30.0, status: if mech.scram_t > 0.0 { format!("DEAD {:.0}s", mech.scram_t) } else if mech.scram_cd > 0.0 { format!("{:.0}s", mech.scram_cd) } else { "KILL BUSES".into() }, status_col: if mech.scram_cd <= 0.0 { GREEN } else { DIM }, enabled: mech.scram_cd <= 0.0 && seated, lit: mech.scram_t > 0.0 },
+        Slot { name: "EJECT", key: "6", color: RED, charge: if overload { 1.0 } else { 0.0 }, status: if overload { "NOW".into() } else { "LOCKED".into() }, status_col: if overload { RED } else { DIM }, enabled: overload, lit: overload && (scene.t * 3.0).fract() < 0.5 },
+        Slot { name: if seated { "CREW" } else { "RETURN" }, key: "7", color: PURPLE, charge: 1.0, status: crew_status.0, status_col: crew_status.1, enabled: seated || matches!(mech.pilot, Pilot::Working { .. }), lit: boarders > 0 && seated },
+    ];
+    let n = slots.len() as f32;
+    let gap = 8.0;
+    let sw = ((inner.width() - gap * (n - 1.0)) / n).min(150.0);
+    let total = sw * n + gap * (n - 1.0);
+    let x0 = inner.center().x - total / 2.0;
+    let sh = inner.height();
+    let mut clicked: Option<usize> = None;
+    for (i, slot) in slots.iter().enumerate() {
+        let r = Rect::from_min_size(Pos2::new(x0 + i as f32 * (sw + gap), inner.min.y), Vec2::new(sw, sh));
+        let resp = ui.interact(r, ui.id().with(("slot", i)), if slot.enabled { Sense::click() } else { Sense::hover() });
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+        let p = ui.painter_at(r);
+        let face = if slot.lit { slot.color.gamma_multiply(0.22) } else { PANEL_DARK };
+        p.rect_filled(r, 0.0, face);
+        let border = if slot.lit { slot.color } else if resp.hovered() && slot.enabled { slot.color.gamma_multiply(0.7) } else { EDGE_HI };
+        p.rect_stroke(r, CornerRadius::ZERO, Stroke::new(if slot.lit { 2.0 } else { 1.0 }, border), StrokeKind::Inside);
+        // Miniature
+        let icon = &art.sprites.hotbar[i];
+        let k = ((sh - 44.0) / 16.0).floor().clamp(2.0, 4.0);
+        let imin = Pos2::new(r.center().x - 8.0 * k, r.min.y + 6.0);
+        let tint = if !slot.enabled && !slot.lit { Some(Color32::from_rgb(110, 110, 120)) } else { None };
+        let flash = if i == 0 && mech.shake > 0.5 { 0.6 } else { 0.0 };
+        icon.paint(&p, imin, k, flash, tint, false);
+        // Charge bar
+        let bar = Rect::from_min_size(Pos2::new(r.min.x + 8.0, imin.y + 16.0 * k + 4.0), Vec2::new(sw - 16.0, 8.0));
+        seg_bar(&p, bar, slot.charge, 10, slot.color);
+        text(&p, Pos2::new(r.min.x + 8.0, r.max.y - 5.0), Align2::LEFT_BOTTOM, slot.name, pix(10.0), if slot.enabled || slot.lit { slot.color } else { DIM });
+        text(&p, Pos2::new(r.max.x - 8.0, r.max.y - 5.0), Align2::RIGHT_BOTTOM, &slot.status, mono(16.0), slot.status_col);
+        text(&p, r.right_top() + Vec2::new(-5.0, 3.0), Align2::RIGHT_TOP, slot.key, mono(15.0), slot.color.gamma_multiply(0.8));
+    }
+    match clicked {
+        Some(0) => cmds.fire_rail = true,
+        Some(1) => mech.weapons_free = !mech.weapons_free,
+        Some(2) => cmds.ecm = true,
+        Some(3) => cmds.vent = true,
+        Some(4) => cmds.scram = true,
+        Some(5) => cmds.eject = true,
+        Some(6) => {
+            if seated {
+                cmds.crawl_to = Some(crew_destination(mech, scene));
+            } else {
+                cmds.return_to_seat = true;
+            }
+        }
+        _ => {}
+    }
+}
+
+// --------------------------------------------------------------------------------------
+// Log: the radio, under the radar. Short lines, newest at the bottom.
 // --------------------------------------------------------------------------------------
 
 fn voice_style(v: Voice) -> (&'static str, Color32) {
     match v {
-        Voice::Control => ("CITY CONTROL", CYAN),
-        Voice::Chief => ("CHIEF ODA", AMBER),
+        Voice::Control => ("CONTROL", CYAN),
+        Voice::Chief => ("ODA", AMBER),
         Voice::Pilot => ("YOU", GREEN),
         Voice::Enemy => ("INTERCEPT", RED),
-        Voice::System => ("BASTION OS", Color32::from_rgb(170, 180, 170)),
+        Voice::System => ("OS", Color32::from_rgb(170, 180, 170)),
     }
 }
 
-fn radio_panel(ui: &mut Ui, rect: Rect, art: &Art, radio: &Radio, animate: bool) {
-    let inner = panel_frame(ui, rect, "RADIO / SHIP LOG", None);
+fn log_panel(ui: &mut Ui, rect: Rect, art: &Art, radio: &Radio, animate: bool) {
+    let inner = panel_frame(ui, rect, "RADIO", None);
     let p = ui.painter_at(inner);
-    let last = radio.log.last();
-    let face_r = Rect::from_min_size(inner.min, Vec2::new(112.0, inner.height()));
-    p.rect_filled(face_r, 0.0, PANEL_DARK);
-    if let Some(m) = last {
+    p.rect_filled(inner, 0.0, Color32::from_rgb(8, 12, 9));
+    // Who spoke last, as a small portrait with a talk indicator.
+    let head = Rect::from_min_size(inner.min, Vec2::new(inner.width(), 60.0));
+    if let Some(m) = radio.log.last() {
         let sprite = match m.voice {
             Voice::Control => &art.sprites.control_face,
             Voice::Chief => &art.sprites.chief_face,
@@ -1595,36 +1399,33 @@ fn radio_panel(ui: &mut Ui, rect: Rect, art: &Art, radio: &Radio, animate: bool)
             Voice::System => &art.sprites.system_face,
         };
         let (name, col) = voice_style(m.voice);
-        let fr = Rect::from_min_size(face_r.min + Vec2::new(8.0, 8.0), Vec2::splat(96.0));
+        let fr = Rect::from_min_size(head.min + Vec2::new(4.0, 4.0), Vec2::splat(48.0));
         p.rect_filled(fr, 0.0, col.gamma_multiply(0.15));
-        sprite.paint(&p, fr.min, 4.0, 0.0, None, false);
+        sprite.paint(&p, fr.min, 2.0, 0.0, None, false);
         scanlines(&p, fr, 50);
-        // Talking indicator
-        let talking = radio.time - m.time < 3.0;
-        text(&p, Pos2::new(face_r.center().x, fr.max.y + 6.0), Align2::CENTER_TOP, name, pix(9.0), col);
-        if talking {
-            for i in 0..6 {
-                let hgt = ((radio.time * 13.0 + i as f32 * 1.7).sin().abs() * 12.0) + 2.0;
-                p.rect_filled(Rect::from_min_size(Pos2::new(face_r.min.x + 26.0 + i as f32 * 10.0, fr.max.y + 40.0 - hgt), Vec2::new(6.0, hgt)), 0.0, col);
+        text(&p, Pos2::new(fr.max.x + 10.0, fr.min.y + 10.0), Align2::LEFT_CENTER, name, pix(10.0), col);
+        if radio.time - m.time < 3.0 {
+            for i in 0..8 {
+                let hgt = ((radio.time * 13.0 + i as f32 * 1.7).sin().abs() * 14.0) + 2.0;
+                p.rect_filled(Rect::from_min_size(Pos2::new(fr.max.x + 10.0 + i as f32 * 8.0, fr.max.y - 4.0 - hgt), Vec2::new(5.0, hgt)), 0.0, col);
             }
         }
     }
-    let log_r = Rect::from_min_max(Pos2::new(face_r.max.x + 8.0, inner.min.y), inner.max);
-    p.rect_filled(log_r, 0.0, Color32::from_rgb(8, 12, 9));
-    child(ui, log_r.shrink(6.0), |ui| {
+    let log_r = Rect::from_min_max(Pos2::new(inner.min.x, head.max.y), inner.max);
+    p.line_segment([log_r.left_top(), log_r.right_top()], Stroke::new(1.0, EDGE_HI));
+    child(ui, log_r.shrink2(Vec2::new(6.0, 4.0)), |ui| {
         egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             let n = radio.log.len();
             for (i, m) in radio.log.iter().enumerate() {
                 let (name, col) = voice_style(m.voice);
                 let mut body = m.text.clone();
                 if i + 1 == n && animate {
-                    // Typewriter on the newest line
                     let chars = ((radio.time - m.time) * 70.0).max(0.0) as usize;
                     body = body.chars().take(chars.max(1)).collect();
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(egui::RichText::new(format!("[{name}]")).color(col).size(18.0));
+                    ui.label(egui::RichText::new(name).color(col).size(17.0));
                     ui.label(egui::RichText::new(body).color(if i + 1 == n { Color32::WHITE } else { TEXT }).size(19.0));
                 });
             }
@@ -1671,9 +1472,9 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
         ui.set_max_width(r.width() - 100.0);
         let body = [
             ("CITY CONTROL", CYAN, "Bastion, the city's uplink relay on your mast is down. Without it the shield grid stays dark and the last districts freeze tonight."),
-            ("CHIEF ODA", AMBER, "Route REPAIR power to the UPLINK and hold position. The reactor makes 100 units and you'll want 200. Pick."),
-            ("CHIEF ODA", AMBER, "Railgun hits hard and cooks the core. Past 100 heat the containment goes in 12 seconds. VENT dumps heat but drops shields; SCRAM kills everything for 6."),
-            ("CITY CONTROL", CYAN, "Expect Jackal scouts, Mortar Crabs sitting out past your radar, and Tick Carriers. Their drones will board you and drink your power."),
+            ("CHIEF ODA", AMBER, "Hold position; the drones rebuild the uplink. Your left camera is dead, so anything west is radar-only: wider error, worse shots."),
+            ("CHIEF ODA", AMBER, "Every weapon heats the core. Past 100, containment goes in 12 seconds. VENT dumps heat but drops shields; SCRAM kills everything for 6."),
+            ("CITY CONTROL", CYAN, "Jackal scouts, Mortar Crabs past your radar, Tick Carriers that board you. Watch the hull: what's lit is what's being hit."),
         ];
         for (who, c, line) in body {
             ui.label(egui::RichText::new(who).color(c).size(20.0));
@@ -1681,7 +1482,7 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
             ui.add_space(6.0);
         }
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("TAB turn camera right, SHIFT+TAB left · C camera wall · T / click target · SPACE fire · V vent · X scram · E ECM · P pause").size(18.0).color(DIM));
+        ui.label(egui::RichText::new("TAB camera right, SHIFT+TAB left · C camera wall · T / click target · 1-7 stations · SPACE fire · P pause").size(18.0).color(DIM));
         let br = Rect::from_min_size(Pos2::new(r.center().x - 140.0, r.max.y - 44.0), Vec2::new(280.0, 44.0));
         if pbutton(&mut ui, br, "BEGIN OPERATION", AMBER, true, true).clicked() {
             mission.briefing = false;
@@ -1735,9 +1536,8 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
             ("TAB", "next camera clockwise (SHIFT+TAB back)"),
             ("C", "camera wall: all four feeds"),
             ("T / click", "select target"),
+            ("1-7", "stations: rail · a/c · ECM · vent · scram · eject · crew"),
             ("SPACE", "fire railgun"),
-            ("1-7, ↑ ↓", "select a bus, ±5 power (shift ±1)"),
-            ("V  X  E", "vent · scram · ECM burst"),
             ("click hull", "send repair drones there"),
             ("P / ESC", "pause"),
         ] {
