@@ -203,10 +203,20 @@ pub fn pbutton(ui: &mut Ui, rect: Rect, label: &str, color: Color32, enabled: bo
         color.gamma_multiply(1.0)
     };
     let off = if down { Vec2::new(1.0, 1.0) } else { Vec2::ZERO };
+    // "FIRE [SPACE]" paints as FIRE with a small key tag in the corner.
+    let (label, key) = match label.split_once(" [") {
+        Some((l, k)) => (l, Some(k.trim_end_matches(']'))),
+        None => (label, None),
+    };
     let base: f32 = if rect.height() > 30.0 { 13.0 } else { 10.0 };
     // Silkscreen is wide: shrink long labels to fit the button.
     let size = base.min((rect.width() - 12.0) / (label.chars().count() as f32 * 0.86)).max(7.0);
     text(p, rect.center() + off, Align2::CENTER_CENTER, label, pix(size), tc);
+    if let Some(k) = key {
+        let tag = rect.right_bottom() - Vec2::new(5.0, 4.0);
+        let kc = if enabled { tc.gamma_multiply(0.7) } else { DIM };
+        text(p, tag + off, Align2::RIGHT_BOTTOM, k, mono(13.0), kc);
+    }
     resp
 }
 

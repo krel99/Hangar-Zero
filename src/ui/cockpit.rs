@@ -214,8 +214,7 @@ fn top_bar(ui: &mut Ui, rect: Rect, mech: &Mech, mission: &mut Mission, scene: &
         p.line_segment([Pos2::new(x, logo.max.y), Pos2::new(x + 12.0, logo.min.y)], Stroke::new(3.0, Color32::from_rgb(30, 24, 16)));
     }
     text(&p, logo.left_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, "HANGAR ZERO", pix(16.0), Color32::from_rgb(20, 16, 10));
-    text(&p, logo.right_center() + Vec2::new(10.0, -8.0), Align2::LEFT_CENTER, format!("WF-7 BASTION // OP-{:02}", mission.number), pix(10.0), AMBER);
-    text(&p, logo.right_center() + Vec2::new(10.0, 8.0), Align2::LEFT_CENTER, "DEFEND & RESTORE UPLINK", mono(18.0), DIM);
+    text(&p, logo.right_center() + Vec2::new(10.0, 0.0), Align2::LEFT_CENTER, format!("WF-7 BASTION // OP-{:02}", mission.number), pix(10.0), AMBER);
 
     // Mission clock
     let clock_x = rect.min.x + 470.0;
@@ -223,12 +222,13 @@ fn top_bar(ui: &mut Ui, rect: Rect, mech: &Mech, mission: &mut Mission, scene: &
 
     // Objective bar
     let ob = Rect::from_min_size(Pos2::new(rect.min.x + 590.0, rect.min.y + 8.0), Vec2::new(420.0, 28.0));
-    text(&p, ob.left_top() + Vec2::new(0.0, -1.0), Align2::LEFT_TOP, "CITY UPLINK RESTORE", pix(9.0), CYAN);
+    text(&p, ob.left_top() + Vec2::new(0.0, -1.0), Align2::LEFT_TOP, "UPLINK", pix(9.0), CYAN);
     let bar = Rect::from_min_max(ob.min + Vec2::new(0.0, 11.0), ob.max);
     seg_bar(&p, bar, mech.uplink() / 100.0, 40, CYAN);
     text(&p, Pos2::new(ob.max.x + 8.0, ob.center().y + 4.0), Align2::LEFT_CENTER, format!("{:3.0}%", mech.uplink()), mono(28.0), CYAN);
-    let hint = if mech.repair_target == Section::Uplink { "DRONES ON UPLINK" } else { "DRONES ELSEWHERE" };
-    text(&p, Pos2::new(ob.max.x - 0.0, ob.min.y - 1.0), Align2::RIGHT_TOP, hint, pix(8.0), if mech.repair_target == Section::Uplink { CYAN } else { AMBER });
+    if mech.repair_target != Section::Uplink && mech.uplink() < 100.0 {
+        text(&p, Pos2::new(ob.max.x, ob.min.y - 1.0), Align2::RIGHT_TOP, "REPAIR DRONES ELSEWHERE", pix(8.0), AMBER);
+    }
 
     // Alarm lamps
     let lamps: [(&str, bool, Color32); 5] = [
@@ -450,8 +450,6 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
     p.rect_filled(Rect::from_center_size(c + Vec2::new(0.0, -5.0), Vec2::new(2.0, 3.0)), 0.0, AMBER);
 
     text(&p, rr.left_bottom() + Vec2::new(4.0, -4.0), Align2::LEFT_BOTTOM, format!("DET {:.0}m", st.radar_range), mono(18.0), GREEN);
-    text(&p, rr.right_bottom() + Vec2::new(-4.0, -4.0), Align2::RIGHT_BOTTOM, format!("ID {:.0}m", st.id_range), mono(18.0), GREEN.gamma_multiply(0.6));
-    text(&p, rr.left_top() + Vec2::new(4.0, 2.0), Align2::LEFT_TOP, format!("SCALE {:.0}m", RADAR_SCALE_M), mono(16.0), DIM);
     if square {
         text(&p, rr.right_top() + Vec2::new(-4.0, 2.0), Align2::RIGHT_TOP, "JACKAL FIRMWARE", mono(16.0), rgb(Maker::Jackal.accent()));
     }
@@ -460,10 +458,9 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
     let list = Rect::from_min_max(Pos2::new(inner.min.x, rr.max.y + 6.0), inner.max);
     let lp = ui.painter_at(list);
     lp.rect_filled(list, 0.0, PANEL_DARK);
-    text(&lp, list.min + Vec2::new(6.0, 3.0), Align2::LEFT_TOP, "CONTACT        CLASS          RANGE  BRG  HULL", mono(16.0), DIM);
     let mut rows: Vec<&(Entity, Enemy)> = scene.enemies.iter().filter(|(_, e)| e.dist <= st.radar_range).collect();
     rows.sort_by(|a, b| a.1.dist.total_cmp(&b.1.dist));
-    let mut y = list.min.y + 22.0;
+    let mut y = list.min.y + 6.0;
     for (ent, e) in rows.iter().take(6) {
         let row = Rect::from_min_size(Pos2::new(list.min.x + 2.0, y), Vec2::new(list.width() - 4.0, 22.0));
         let sel = mech.target == Some(*ent);
@@ -494,7 +491,7 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
         y += 23.0;
     }
     if rows.is_empty() {
-        text(&lp, list.center(), Align2::CENTER_CENTER, "NO CONTACTS IN DETECTION RANGE", mono(19.0), DIM);
+        text(&lp, list.center(), Align2::CENTER_CENTER, "NO CONTACTS", mono(19.0), DIM);
     }
 }
 
@@ -714,10 +711,9 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
         p.line_segment([cc + a, cc + b], Stroke::new(1.0, GREEN.gamma_multiply(0.7)));
     }
     if (scene.t * 1.5).fract() < 0.6 {
-        p.circle_filled(fr.min + Vec2::new(16.0, 32.0), 5.0, RED);
+        p.circle_filled(fr.min + Vec2::new(16.0, 48.0), 5.0, RED);
     }
-    text(p, fr.min + Vec2::new(26.0, 32.0), Align2::LEFT_CENTER, format!("CAM-1  BRG {:03.0}", bearing_deg(bearing)), mono(18.0), GREEN);
-    text(p, fr.right_top() + Vec2::new(-8.0, 24.0), Align2::RIGHT_TOP, if mech.target.is_some() { "TRACK: TARGET" } else { "TRACK: SCAN" }, mono(18.0), GREEN);
+    text(p, fr.min + Vec2::new(26.0, 48.0), Align2::LEFT_CENTER, "CAM-1", mono(18.0), GREEN);
 
     // Damaged sensors / heat
     let sf = mech.frac(Section::Sensors);
@@ -871,7 +867,7 @@ fn interior_view(ui: &mut Ui, p: &egui::Painter, fr: Rect, s: f32, art: &Art, me
         }
     };
     let (pos, status) = match mech.pilot {
-        Pilot::Seat => (floor(&room_rect[&Section::Cockpit]), "PILOT IN CHAIR. CLICK A COMPARTMENT TO CRAWL THERE.".to_string()),
+        Pilot::Seat => (floor(&room_rect[&Section::Cockpit]), "CLICK A COMPARTMENT TO CRAWL THERE".to_string()),
         Pilot::Crawling { to, t, dur } => (path(to, t / dur), format!("CRAWLING TO {} ... {:.1}s", to.name(), dur - t)),
         Pilot::Working { at, t } => {
             let n = scene.boarders_on(at);
@@ -949,7 +945,6 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
             ("ETA", eta),
             ("HEAT/SHOT", format!("+{:.0}", 22.0 + campaign.mods.rail_heat)),
             ("HIT CHANCE", if lock { format!("{:.0}%", hitp * 100.0) } else { "--".into() }),
-            ("MOUNT", format!("{:.0}%", mech.frac(Section::Railgun) * 100.0)),
         ] {
             text(&p, Pos2::new(x, y), Align2::LEFT_TOP, k, mono(18.0), DIM);
             text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, v, mono(18.0), TEXT);
@@ -1003,9 +998,7 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
         y += 28.0;
         for (k, v) in [
             ("DAMAGE", format!("{:.0}/s", st.ac_dps)),
-            ("RANGE", format!("{:.0}m", AC_RANGE)),
             ("HEAT", format!("+{:.1}/s firing", st.eff[Sys::Autocannon.idx()] * 0.14)),
-            ("MOUNT", format!("{:.0}%", mech.frac(Section::Autocannon) * 100.0)),
         ] {
             text(&p, Pos2::new(x, y), Align2::LEFT_TOP, k, mono(18.0), DIM);
             text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, v, mono(18.0), TEXT);
@@ -1073,7 +1066,6 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
                 cmds.return_to_seat = true;
             }
         }
-        text(&p, Pos2::new(x, by - 4.0), Align2::LEFT_BOTTOM, if seated { format!("CRAWL TARGET: {}", dest.short()) } else { "PILOT AWAY".into() }, mono(16.0), DIM);
     }
 }
 
@@ -1145,7 +1137,7 @@ fn power_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotCommand
     } else if over {
         note.push_str(&format!("OVERDRIVE +{:.0}u → +{:.1} heat/s", st.draw - st.available, (st.draw - st.available) * OVERDRIVE_HEAT));
     }
-    text(&p, bar.left_bottom() + Vec2::new(0.0, 3.0), Align2::LEFT_TOP, if note.is_empty() { "BUS NOMINAL".to_string() } else { note }, mono(17.0), if over || st.parasitic > 0.0 { AMBER } else { DIM });
+    text(&p, bar.left_bottom() + Vec2::new(0.0, 3.0), Align2::LEFT_TOP, note, mono(17.0), if over || st.parasitic > 0.0 { AMBER } else { DIM });
 
     // --- Faders ---------------------------------------------------------------------------
     let fz = Rect::from_min_max(Pos2::new(inner.min.x, bus.max.y + 6.0), Pos2::new(inner.max.x - 118.0, inner.max.y - 84.0));
@@ -1276,8 +1268,6 @@ fn power_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotCommand
     if pbutton(ui, b(4, 36.0, 0.0), "EJECT", RED, eject_on, eject_on && (scene.t * 3.0).fract() < 0.5).clicked() {
         cmds.eject = true;
     }
-    let hint = "1-7 select bus · ↑/↓ ±5 · drag faders · past the white line = overdrive heat";
-    text(&p, Pos2::new(er.min.x, er.max.y - 2.0), Align2::LEFT_BOTTOM, hint, mono(16.0), DIM);
     if let Some(t) = mech.overload {
         let big = Rect::from_center_size(fz.center(), Vec2::new(fz.width() - 20.0, 70.0));
         let pp = ui.painter();
@@ -1452,7 +1442,7 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
             tag = format!("{tag} T{nb}");
         }
         text(pp, Pos2::new(row.max.x - 30.0, row.center().y), Align2::RIGHT_CENTER, tag, mono(17.0), if nb > 0 { PURPLE } else { TEXT });
-        if sec != Section::Cockpit {
+        if sec != Section::Cockpit && resp.hovered() {
             let go = Rect::from_min_size(Pos2::new(row.max.x - 26.0, row.min.y + 1.0), Vec2::new(26.0, rh - 3.0));
             if pbutton(ui, go, "GO", PURPLE, mech.pilot.in_seat(), false).on_hover_text("Leave the chair and crawl here").clicked() {
                 cmds.crawl_to = Some(sec);
@@ -1520,7 +1510,6 @@ fn radio_panel(ui: &mut Ui, rect: Rect, art: &Art, radio: &Radio, animate: bool)
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(egui::RichText::new(format!("T+{}", fmt_clock(m.time))).color(DIM).size(18.0));
                     ui.label(egui::RichText::new(format!("[{name}]")).color(col).size(18.0));
                     ui.label(egui::RichText::new(body).color(if i + 1 == n { Color32::WHITE } else { TEXT }).size(19.0));
                 });
@@ -1623,10 +1612,23 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
         return;
     }
     if mission.paused {
-        let mut ui = modal(ctx, "pause", Vec2::new(420.0, 160.0), DIM);
+        let mut ui = modal(ctx, "pause", Vec2::new(520.0, 300.0), DIM);
         let r = ui.max_rect();
         let p = ui.painter().clone();
         text(&p, Pos2::new(r.center().x, r.min.y + 4.0), Align2::CENTER_TOP, "PAUSED", pix(24.0), AMBER);
+        let mut y = r.min.y + 52.0;
+        for (k, v) in [
+            ("SPACE", "fire railgun"),
+            ("TAB / click", "select target"),
+            ("1-7, ↑ ↓", "select a bus, ±5 power (shift ±1)"),
+            ("V  X  E", "vent · scram · ECM burst"),
+            ("click hull", "send repair drones there"),
+            ("P / ESC", "pause"),
+        ] {
+            text(&p, Pos2::new(r.min.x + 130.0, y), Align2::RIGHT_TOP, k, mono(21.0), AMBER);
+            text(&p, Pos2::new(r.min.x + 146.0, y), Align2::LEFT_TOP, v, mono(21.0), TEXT);
+            y += 24.0;
+        }
         let br = Rect::from_min_size(Pos2::new(r.center().x - 100.0, r.max.y - 44.0), Vec2::new(200.0, 40.0));
         if pbutton(&mut ui, br, "RESUME [P]", AMBER, true, true).clicked() {
             mission.paused = false;
