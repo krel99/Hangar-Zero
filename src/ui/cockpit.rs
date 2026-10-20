@@ -587,7 +587,7 @@ fn feed_panel(
             let cell = Rect::from_min_size(inner.min + Vec2::new(cx as f32 * (cw + gap), cy as f32 * (ch + gap)), Vec2::new(cw, ch));
             let fr = Rect::from_center_size(cell.center(), Vec2::new(FEED_W * scale, FEED_H * scale));
             let p = ui.painter_at(fr);
-            cam_view(&p, fr, scale, cam, art, mech, fx, campaign, scene);
+            cam_view(&p, fr, scale, cam, art, mech, fx, campaign, scene, false);
             scanlines(&p, fr, 24);
             vignette(&p, fr);
             if mech.active_cam == cam {
@@ -601,7 +601,7 @@ fn feed_panel(
         let scale = (inner.width() / FEED_W).min(inner.height() / FEED_H).max(1.0);
         let fr = Rect::from_center_size(inner.center(), Vec2::new(FEED_W * scale, FEED_H * scale));
         let p = ui.painter_at(fr);
-        cam_view(&p, fr, scale, mech.active_cam, art, mech, fx, campaign, scene);
+        cam_view(&p, fr, scale, mech.active_cam, art, mech, fx, campaign, scene, true);
         scanlines(&p, fr, 24);
         vignette(&p, fr);
     }
@@ -616,7 +616,7 @@ fn vignette(p: &egui::Painter, fr: Rect) {
 
 /// One fixed hull camera, looking down its quadrant.
 #[allow(clippy::too_many_arguments)]
-fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &Mech, fx: &Effects, campaign: &Campaign, scene: &Scene) {
+fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &Mech, fx: &Effects, campaign: &Campaign, scene: &Scene, single: bool) {
     let bearing = camera_bearing(cam);
     let fov = CAMERA_FOV;
     let px = |x: f32, y: f32| fr.min + Vec2::new(x * s, y * s);
@@ -812,8 +812,8 @@ fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &M
             text(p, px(x, tape_y + 5.0), Align2::CENTER_TOP, lbl, mono(16.0), GREEN);
         }
     }
-    // Off-camera target: an arrow on the edge it is nearest to, with how far to turn.
-    if let Some((_, e)) = mech.target.and_then(|t| scene.enemies.iter().find(|(en, _)| *en == t)) {
+    // Off-camera target (single view only): an arrow on the nearer edge, with how far to turn.
+    if let Some((_, e)) = mech.target.and_then(|t| scene.enemies.iter().find(|(en, _)| *en == t)).filter(|_| single) {
         let rel = angle_diff(e.est_angle, bearing);
         if rel.abs() >= fov * 0.6 {
             let right = rel > 0.0;
