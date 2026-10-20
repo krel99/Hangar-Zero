@@ -60,26 +60,36 @@ pub fn mono(size: f32) -> FontId {
 pub struct Art {
     pub sprites: SpriteBank,
     pub hull: Vec<u8>,
-    pub pano: Option<egui::TextureHandle>,
+    pub hull_detail: Vec<u8>,
+    pub pano_far: Option<egui::TextureHandle>,
+    pub pano_near: Option<egui::TextureHandle>,
     pub hangar: Option<egui::TextureHandle>,
 }
 
 impl Default for Art {
     fn default() -> Self {
-        Self { sprites: SpriteBank::new(), hull: crate::art::hull_map(), pano: None, hangar: None }
+        Self {
+            sprites: SpriteBank::new(),
+            hull: crate::art::hull_map(),
+            hull_detail: crate::art::hull_detail(),
+            pano_far: None,
+            pano_near: None,
+            hangar: None,
+        }
     }
 }
 
 impl Art {
     pub fn ensure_textures(&mut self, ctx: &egui::Context) {
-        if self.pano.is_none() {
+        if self.pano_far.is_none() {
             let opts = egui::TextureOptions {
                 magnification: egui::TextureFilter::Nearest,
                 minification: egui::TextureFilter::Nearest,
                 wrap_mode: egui::TextureWrapMode::Repeat,
                 mipmap_mode: None,
             };
-            self.pano = Some(ctx.load_texture("city_pano", crate::art::city_panorama(), opts));
+            self.pano_far = Some(ctx.load_texture("city_far", crate::art::city_far(), opts));
+            self.pano_near = Some(ctx.load_texture("city_near", crate::art::city_near(), opts));
             self.hangar = Some(ctx.load_texture("hangar", crate::art::hangar_backdrop(), egui::TextureOptions::NEAREST));
         }
     }

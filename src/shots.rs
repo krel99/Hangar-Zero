@@ -180,7 +180,7 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
         _ => {
             // "combat": the general cockpit view mid-fight.
             commands.spawn(mk(EnemyKind::Scout, 5, deg(22.0), 230.0, EnemyState::Engaged, 41.0, 60.0, 1.0));
-            commands.spawn(mk(EnemyKind::Scout, 6, deg(71.0), 190.0, EnemyState::Engaged, 60.0, 60.0, -1.0));
+            commands.spawn(mk(EnemyKind::Scout, 6, deg(62.0), 330.0, EnemyState::Approach, 60.0, 60.0, -1.0));
             commands.spawn(mk(EnemyKind::Artillery, 3, deg(302.0), 600.0, EnemyState::Engaged, 141.0, 200.0, 1.0));
             commands.spawn(mk(EnemyKind::Carrier, 4, deg(118.0), 345.0, EnemyState::Engaged, 96.0, 150.0, 1.0));
             commands.spawn(Drone { angle: deg(118.0), dist: 150.0, hp: 10.0 });

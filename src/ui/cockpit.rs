@@ -568,12 +568,25 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
     let fov = PI / 2.0;
     let px = |x: f32, y: f32| fr.min + Vec2::new(x * s, y * s);
 
-    // Panorama (repeat-wrapped texture)
-    if let Some(tex) = &art.pano {
+    // Panorama: far layer scrolls at 60% of the bearing for parallax, near layer on top.
+    let v1 = FEED_H / art::PANO_H as f32;
+    if let Some(tex) = &art.pano_far {
+        let u0 = (bearing * 0.6 - fov / 2.0) / TAU;
+        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + fov / TAU, v1)), Color32::WHITE);
+    }
+    if let Some(tex) = &art.pano_near {
         let u0 = (bearing - fov / 2.0) / TAU;
-        let u1 = u0 + fov / TAU;
-        let v1 = FEED_H / art::PANO_H as f32;
-        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u1, v1)), Color32::WHITE);
+        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + fov / TAU, v1)), Color32::WHITE);
+    }
+    // Drifting ash and embers
+    for i in 0..40 {
+        let h = hash2(i, 0, 23);
+        let speed = 4.0 + (h % 7) as f32;
+        let y = ((h >> 8) as f32 * 0.37 + scene.t as f32 * speed) % FEED_H;
+        let x = ((h >> 16) as f32 * 0.53 + (scene.t as f32 * 0.7 + i as f32).sin() * 6.0 - bearing.to_degrees() * 2.0).rem_euclid(FEED_W);
+        let ember = h % 9 == 0;
+        let c = if ember { Color32::from_rgb(255, 150, 60) } else { Color32::from_rgb(110, 96, 100) };
+        p.rect_filled(Rect::from_min_size(px(x.floor(), y.floor()), Vec2::splat(s)), 0.0, c);
     }
     let to_x = |angle: f32| -> Option<f32> {
         let rel = angle_diff(angle, bearing);
@@ -666,18 +679,15 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
         }
     }
 
-    // Cockpit framing: arm silhouettes in the lower corners
-    let frame = Color32::from_rgb(18, 18, 22);
-    let rail_col = rgb(campaign.makers[Section::Railgun.idx()].accent()).gamma_multiply(0.45);
-    let ac_col = rgb(campaign.makers[Section::Autocannon.idx()].accent()).gamma_multiply(0.45);
-    for i in 0..12 {
-        let y = 150.0 - i as f32 * 2.0;
-        let w = 22.0 - i as f32;
-        p.rect_filled(Rect::from_min_size(px(256.0 + i as f32, y - 2.0), Vec2::new((w + 30.0) * s, 2.0 * s)), 0.0, frame);
-        p.rect_filled(Rect::from_min_size(px(34.0 - i as f32 * 0.3, y - 2.0), Vec2::new((w + 10.0) * s, 2.0 * s)), 0.0, frame);
-    }
-    p.rect_filled(Rect::from_min_size(px(262.0, 140.0), Vec2::new(14.0 * s, 3.0 * s)), 0.0, rail_col);
-    p.rect_filled(Rect::from_min_size(px(44.0, 140.0), Vec2::new(14.0 * s, 3.0 * s)), 0.0, ac_col);
+    // Cockpit framing: the mech's own arms in the lower corners, faceplates in maker colours.
+    let rail_col = rgb(campaign.makers[Section::Railgun.idx()].accent());
+    let ac_col = rgb(campaign.makers[Section::Autocannon.idx()].accent());
+    let recoil = if mech.shake > 0.3 { (mech.shake * 3.0).round() } else { 0.0 };
+    let aw = art.sprites.arm_rail.w as f32;
+    let ah = art.sprites.arm_rail.h as f32;
+    art.sprites.arm_rail.paint_accent(p, px(FEED_W - aw + 6.0 + recoil, FEED_H - ah + 4.0 + recoil), s, 0.0, None, false, Some(rail_col));
+    let ac_jitter = if mech.ac_firing { ((scene.t * 60.0) as i32 % 2) as f32 } else { 0.0 };
+    art.sprites.arm_ac.paint_accent(p, px(-6.0, FEED_H - ah + 4.0 + ac_jitter), s, 0.0, None, true, Some(ac_col));
 
     // HUD: bearing tape, crosshair, REC
     let tape_y = 4.0;
@@ -821,6 +831,13 @@ fn interior_view(ui: &mut Ui, p: &egui::Painter, fr: Rect, s: f32, art: &Art, me
                     p.rect_filled(Rect::from_min_size(Pos2::new(r.min.x + x as f32, r.min.y + 4.0 * s), Vec2::splat(s)), 0.0, YELLOW);
                 }
             }
+        }
+        // Machinery
+        let prop = &art.sprites.props[sec.idx()];
+        prop.paint(p, Pos2::new(r.min.x + 30.0 * s, r.max.y - (prop.h as f32 + 4.0) * s), s, 0.0, None, false);
+        if *sec == Section::Reactor {
+            let pulse = ((t * 2.5).sin() * 0.5 + 0.5) as f32;
+            p.rect_filled(Rect::from_min_size(Pos2::new(r.min.x + 33.0 * s, r.max.y - 11.0 * s), Vec2::new(8.0 * s, 4.0 * s)), 0.0, Color32::from_rgba_unmultiplied(255, 180, 80, (60.0 * pulse) as u8));
         }
         // Boarders in the room
         let n = scene.boarders_on(*sec);
@@ -1337,7 +1354,12 @@ fn hull_panel(ui: &mut Ui, rect: Rect, art: &Art, mech: &mut Mech, cmds: &mut Pi
                 }
                 c
             };
-            if edge {
+            let d = art.hull_detail[y as usize * art::HULL_W + x as usize];
+            if d == art::HD_HAZARD {
+                col = if art::hull_hazard_dark(x, y) { Color32::from_rgb(24, 22, 20) } else { art::hull_shade(col, d, t) };
+            } else if d != art::HD_NONE {
+                col = art::hull_shade(col, d, t);
+            } else if edge {
                 col = if hi { col.gamma_multiply(1.15) } else { col.gamma_multiply(0.45) };
             } else {
                 col = col.gamma_multiply(0.78);
@@ -1471,7 +1493,7 @@ fn radio_panel(ui: &mut Ui, rect: Rect, art: &Art, radio: &Radio, animate: bool)
         let (name, col) = voice_style(m.voice);
         let fr = Rect::from_min_size(face_r.min + Vec2::new(8.0, 8.0), Vec2::splat(96.0));
         p.rect_filled(fr, 0.0, col.gamma_multiply(0.15));
-        sprite.paint(&p, fr.min, 6.0, 0.0, None, false);
+        sprite.paint(&p, fr.min, 4.0, 0.0, None, false);
         scanlines(&p, fr, 50);
         // Talking indicator
         let talking = radio.time - m.time < 3.0;
@@ -1540,7 +1562,7 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
         text(&p, r.min, Align2::LEFT_TOP, format!("OPERATION {:02} // BRIEFING", mission.number), pix(18.0), AMBER);
         let face = Rect::from_min_size(Pos2::new(r.max.x - 84.0, r.min.y + 30.0), Vec2::splat(84.0));
         p.rect_filled(face, 0.0, CYAN.gamma_multiply(0.15));
-        art.sprites.control_face.paint(&p, face.min + Vec2::new(2.0, 2.0), 5.0, 0.0, None, false);
+        art.sprites.control_face.paint(&p, face.min + Vec2::new(0.0, 0.0), 3.5, 0.0, None, false);
         scanlines(&p, face, 50);
         ui.add_space(36.0);
         ui.set_max_width(r.width() - 100.0);

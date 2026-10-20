@@ -22,8 +22,12 @@ or cut power and sit still while the scouts close in.
 | One failure state: reactor overload | `src/sim.rs` (`power_and_heat`, `check_outcome`) |
 | One hangar screen with five salvage choices | `src/ui/hangar.rs`, `src/campaign.rs` |
 
-All the pixel art is hand-authored as text grids (`src/art.rs`). The city panorama and the
-hangar are painted procedurally at startup, so the game ships no image assets. Fonts are
+All the pixel art is hand-authored as text grids (`src/art.rs`): enemies, portraits, salvage
+icons, the interior machinery of every compartment, and the mech's own gun arms framing the
+camera feed. The hull diagram is a section map plus a detail overlay (rivets, seams, canopy
+glass, reactor glow, barrel rings) shared by the damage display and the hangar portrait. The
+city is a two-layer 360° panorama (far layer parallaxes at 60% of the camera bearing) and the
+hangar backdrop is painted procedurally at startup, so the game ships no image assets. Fonts are
 [VT323](https://fonts.google.com/specimen/VT323) and [Silkscreen](https://fonts.google.com/specimen/Silkscreen)
 (SIL OFL, in `assets/fonts`).
 

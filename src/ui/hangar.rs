@@ -50,7 +50,7 @@ pub fn hangar_ui(
         Vec2::new(art::HULL_W as f32 * ms, art::HULL_H as f32 * ms),
     );
     paint_cradle(&p, mech_rect, cradle_y, r.max.y, s);
-    paint_mech(&p, mech_rect, ms, &art.hull, &campaign, t);
+    paint_mech(&p, mech_rect, ms, &art.hull, &art.hull_detail, &campaign, t);
     // Welding sparks
     for i in 0..10 {
         let h = hash2(i, (t * 14.0) as i32, 3);
@@ -157,10 +157,10 @@ pub fn hangar_ui(
         text(&p, cr.min + Vec2::new(8.0, 12.0), Align2::LEFT_CENTER, info.maker.name(), pix(9.0), accent);
         text(&p, Pos2::new(cr.max.x - 8.0, cr.min.y + 12.0), Align2::RIGHT_CENTER, info.section.short(), pix(9.0), DIM);
         // Icon plinth
-        let ir = Rect::from_min_size(cr.min + Vec2::new(10.0, 32.0), Vec2::splat(80.0));
+        let ir = Rect::from_min_size(cr.min + Vec2::new(10.0, 32.0), Vec2::splat(88.0));
         p.rect_filled(ir, 0.0, PANEL_DARK);
         let bob = ((t * 2.0 + i as f64).sin() * 2.0) as f32;
-        art.sprites.icons[info.icon].paint(&p, ir.min + Vec2::new(8.0, 8.0 + bob.round()), 4.0, 0.0, None, false);
+        art.sprites.icons[info.icon].paint(&p, ir.min + Vec2::new(4.0, 4.0 + bob.round()), 4.0, 0.0, None, false);
         child(&mut ui, Rect::from_min_max(Pos2::new(ir.max.x + 10.0, ir.min.y - 2.0), Pos2::new(cr.max.x - 8.0, ir.max.y + 8.0)), |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add(egui::Label::new(egui::RichText::new(info.name).size(22.0).color(Color32::WHITE)).wrap());
@@ -219,7 +219,7 @@ fn paint_cradle(p: &egui::Painter, mech: Rect, y: f32, floor: f32, s: f32) {
     p.rect_filled(Rect::from_min_size(deck.min, Vec2::new(deck.width(), s * 0.6)), 0.0, Color32::from_rgb(120, 116, 104));
 }
 
-fn paint_mech(p: &egui::Painter, rect: Rect, s: f32, map: &[u8], campaign: &Campaign, t: f64) {
+fn paint_mech(p: &egui::Painter, rect: Rect, s: f32, map: &[u8], detail: &[u8], campaign: &Campaign, t: f64) {
     let at = |x: i32, y: i32| -> u8 {
         if x < 0 || y < 0 || x >= art::HULL_W as i32 || y >= art::HULL_H as i32 { 254 } else { map[y as usize * art::HULL_W + x as usize] }
     };
@@ -257,10 +257,17 @@ fn paint_mech(p: &egui::Painter, rect: Rect, s: f32, map: &[u8], campaign: &Camp
             };
             let edge = at(x - 1, y) != v || at(x + 1, y) != v || at(x, y - 1) != v || at(x, y + 1) != v;
             let hi = at(x, y - 1) != v || at(x - 1, y) != v;
-            let col = if edge { if hi { base.gamma_multiply(1.2) } else { base.gamma_multiply(0.4) } } else { base.gamma_multiply(0.8) };
+            let d = detail[y as usize * art::HULL_W + x as usize];
+            let col = if d == art::HD_HAZARD {
+                if art::hull_hazard_dark(x, y) { Color32::from_rgb(24, 22, 20) } else { art::hull_shade(base, d, t) }
+            } else if d != art::HD_NONE {
+                art::hull_shade(base, d, t)
+            } else if edge {
+                if hi { base.gamma_multiply(1.2) } else { base.gamma_multiply(0.4) }
+            } else {
+                base.gamma_multiply(0.8)
+            };
             p.rect_filled(Rect::from_min_size(rect.min + Vec2::new(x as f32 * s, y as f32 * s), Vec2::splat(s)), 0.0, col);
         }
     }
-    // Cockpit glow
-    p.rect_filled(Rect::from_min_size(rect.min + Vec2::new(17.0 * s, 11.0 * s), Vec2::new(6.0 * s, 2.0 * s)), 0.0, Color32::from_rgb(255, 190, 90).gamma_multiply(0.8));
 }
