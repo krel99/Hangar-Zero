@@ -128,7 +128,7 @@ fn start_mission(mut commands: Commands, campaign: Res<Campaign>, mut radio: Res
     *radio = Radio::default();
     fx.list.clear();
     *cmds = PilotCommands::default();
-    radio.say(Voice::System, "COLD START. 3 FAULTS.");
+    radio.say(Voice::System, "COLD START. 4 FAULTS.");
     radio.say(Voice::Control, "Uplink's dark. Get it up, hold the line.");
     if campaign.mission > 1 {
         radio.say(Voice::Chief, format!("Op {:02}. She's not what she was.", campaign.mission));

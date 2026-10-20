@@ -135,9 +135,9 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
     radio.time = 0.0;
     radio.log.clear();
     let script: [(f32, Voice, &str); 12] = [
-        (0.0, Voice::System, "COLD START. 3 FAULTS."),
+        (0.0, Voice::System, "COLD START. 4 FAULTS."),
         (2.0, Voice::Control, "Uplink's dark. Get it up, hold the line."),
-        (31.0, Voice::Control, "Heavy contact bearing 302."),
+        (31.0, Voice::Control, "Heavy contact bearing 302. Crab."),
         (47.0, Voice::Pilot, "Scout down."),
         (56.0, Voice::Control, "Carrier bearing 118. Watch for ticks."),
         (66.0, Voice::Enemy, "CRB-03 braced. Ranging."),

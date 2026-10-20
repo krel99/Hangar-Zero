@@ -248,6 +248,8 @@ pub struct Mech {
     pub cameras: [f32; CAMERAS],
     /// Seconds-ish since each section last took damage (1 = just now), for the diagram.
     pub hit_t: [f32; 10],
+    /// Cameras working when the op began; the CAM alarm only fires for losses since.
+    pub cams_at_start: usize,
     pub active_cam: usize,
     pub quad_view: bool,
     /// Snapshot of the derived numbers for the UI.
@@ -310,6 +312,7 @@ impl Mech {
             kills: 0,
             cameras: campaign.cameras,
             hit_t: [0.0; 10],
+            cams_at_start: campaign.cameras.iter().filter(|c| **c >= CAMERA_MIN).count(),
             active_cam: 0,
             quad_view: false,
             stats: Derived::default(),
@@ -419,6 +422,7 @@ pub struct Enemy {
     /// Bearing error of the estimate in radians; 0 when camera-covered.
     pub err: f32,
     pub covered: bool,
+    /// Mission time of the last radar sample.
     pub last_sweep: f32,
 }
 
@@ -704,22 +708,26 @@ fn spawn_waves(
     }
     mission.next_wave += 1;
     let bearing = rng.range(0.0, TAU);
+    // One callout per wave, naming the heaviest thing in it.
+    let heaviest = kinds.iter().copied().max_by_key(|k| match k {
+        EnemyKind::Artillery => 2,
+        EnemyKind::Carrier => 1,
+        EnemyKind::Scout => 0,
+    });
+    let n = kinds.len();
     for kind in kinds {
         let a = bearing + rng.range(-0.5, 0.5);
         let d = rng.range(950.0, 1100.0);
         spawn_enemy(&mut commands, &mut rng, &mut mission, kind, a, d);
-        match kind {
-            EnemyKind::Scout => {}
-            EnemyKind::Artillery => radio.say(
-                Voice::Control,
-                format!("Heavy contact bearing {:03.0}.", bearing_deg(a)),
-            ),
-            EnemyKind::Carrier => radio.say(
-                Voice::Control,
-                format!("Carrier bearing {:03.0}. Watch for ticks.", bearing_deg(a)),
-            ),
-        }
     }
+    let brg = bearing_deg(bearing);
+    let line = match heaviest {
+        Some(EnemyKind::Artillery) => format!("Heavy contact bearing {brg:03.0}. Crab."),
+        Some(EnemyKind::Carrier) => format!("Carrier bearing {brg:03.0}. Watch for ticks."),
+        _ if n > 1 => format!("{n} scouts bearing {brg:03.0}."),
+        _ => format!("Scout bearing {brg:03.0}."),
+    };
+    radio.say(Voice::Control, line);
 }
 
 pub fn bearing_deg(a: f32) -> f32 {
@@ -1128,7 +1136,12 @@ fn weapons(
             commands.entity(e).despawn();
             mech.kills += 1;
             if mech.target == Some(e) {
-                mech.target = None;
+                // Acquire the nearest remaining contact so the next shot is not lost to a keypress.
+                mech.target = enemies
+                    .iter()
+                    .filter(|(o, en)| *o != e && en.hp > 0.0 && en.dist <= st.radar_range)
+                    .min_by(|a, b| a.1.dist.total_cmp(&b.1.dist))
+                    .map(|(o, _)| o);
             }
             let line = match en.kind {
                 EnemyKind::Scout => "Scout down.",
@@ -1286,7 +1299,7 @@ fn hit_mech(mech: &mut Mech, mission: &mut Mission, s: Section, dmg: f32, from: 
 
 /// Radar contacts: a camera-covered contact is tracked exactly; anything else is a
 /// blip re-sampled on every sweep pass with an error that sensor power shrinks.
-fn sensor_fusion(mut rng: ResMut<Rng>, mech: Res<Mech>, campaign: Res<Campaign>, mut enemies: Query<&mut Enemy>) {
+fn sensor_fusion(mut rng: ResMut<Rng>, mech: Res<Mech>, campaign: Res<Campaign>, mission: Res<Mission>, mut enemies: Query<&mut Enemy>) {
     let st = mech.stats;
     let sens = st.eff[Sys::Sensors.idx()];
     let head = mech.frac(Section::Sensors);
@@ -1304,9 +1317,9 @@ fn sensor_fusion(mut rng: ResMut<Rng>, mech: Res<Mech>, campaign: Res<Campaign>,
         e.covered = false;
         // Did the sweep cross this contact since the last sample?
         let since = (mech.sweep - e.angle).rem_euclid(TAU);
-        let passed = since < 0.12 && mech.sweep - e.last_sweep > 1.0 || was_covered;
+        let passed = (since < 0.12 && mission.time - e.last_sweep > 1.0) || was_covered;
         if passed || e.last_sweep < -5.0 {
-            e.last_sweep = mech.sweep;
+            e.last_sweep = mission.time;
             let err = base_err.to_radians();
             e.err = err;
             e.est_angle = (e.angle + rng.range(-err, err)).rem_euclid(TAU);

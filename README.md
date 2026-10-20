@@ -148,7 +148,7 @@ Or you take the **Bastion Original Spares** and try to keep her the machine she 
 |---|---|
 | `Tab` / `Shift+Tab` | Turn to the next hull camera clockwise / counter-clockwise |
 | `C` / QUAD | Camera wall: all four feeds at once |
-| Click radar blip / contact row, `T` | Select target |
+| Click radar blip, `T` | Select target (the nearest contact is picked for you after a kill) |
 | `1`–`7` / click a station | RAIL · A/C · ECM · VENT · SCRAM · EJECT · CREW |
 | `Space` | Fire railgun (needs full charge and a target inside radar range) |
 | Click the hull diagram | Send repair drones to that section |
