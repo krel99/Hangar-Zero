@@ -12,6 +12,8 @@ or cut power and sit still while the scouts close in.
 
 ![Cockpit mid-fight](docs/combat.png)
 
+![Camera wall](docs/quad.png)
+
 ## What's in the prototype
 
 | Spec item | Where it is |
@@ -61,6 +63,24 @@ a damaged reactor, leaking coolant, and failed interlocks after a cockpit breach
 
 ![Reactor overload](docs/overload.png)
 
+### The cameras are the sensor
+
+Four fixed hull cameras cover the quadrants: FWD 000, RIGHT 090, AFT 180, LEFT 270. The
+feed is the biggest thing on the console because it is the mech's eyes, not decoration:
+
+* A contact inside a *working* camera's 90° is **covered**: exact position, class, full
+  railgun accuracy, full autocannon damage, and its muzzle flashes are triangulated.
+* Anything else is **radar-only**. Its blip is re-sampled once per sweep with a bearing
+  error (shown as a ring) that shrinks when you route power to SENS. Railgun hit chance
+  falls with that error, the autocannon does half damage, and the station says RADAR LOCK.
+* Cameras have their own health. Fire that reaches the sensor head also hits the camera
+  facing the shooter; below 20% it shows NO SIGNAL and its quadrant goes radar-only.
+  Repair drones can't reach the mast — only the pilot can, by hand, at the sensor head —
+  or the hangar may offer a salvaged CCTV cluster.
+
+Bastion starts her first operation already scarred: the LEFT camera is dead, so one
+quadrant is radar-only from the first contact.
+
 ### Localized damage
 
 Ten sections, each with its own integrity, and each one changes how you play:
@@ -70,7 +90,7 @@ Ten sections, each with its own integrity, and each one changes how you play:
 * **Coolant lines**: cooling efficiency. Below 35% they leak heat.
 * **Cockpit**: below 25% the canopy is breached and a 45 s countdown starts. When it runs
   out the reactor interlocks fail and the core heats permanently.
-* **Weapon mounts**: charge rate and damage.
+* **Weapon mounts**: charge rate and damage; a destroyed mount takes the station offline.
 * **Reactor**: output.
 * **Shield emitters**: capacity.
 * **City uplink**: the objective. Artillery can knock restore progress back down.
@@ -116,7 +136,9 @@ Or you take the **Bastion Original Spares** and try to keep her the machine she 
 
 | Input | Action |
 |---|---|
-| Click radar blip / contact row, `Tab` | Select target |
+| `Tab` / `Shift+Tab` | Turn to the next hull camera clockwise / counter-clockwise |
+| `C` / QUAD | Camera wall: all four feeds at once |
+| Click radar blip / contact row, `T` | Select target |
 | `Space` / FIRE | Fire railgun (needs full charge and a target inside radar range) |
 | Drag faders, `+`/`-`, `1`–`7` + `↑`/`↓` | Route power (`Shift` for ±1) |
 | ASSAULT / RESTORE | Routing presets |
@@ -147,14 +169,17 @@ simulation run for a couple of seconds, then saves the window:
 
 ```sh
 ./scripts/screenshots.sh                  # all scenes, uses xvfb-run
-HZ_SCENE=combat HZ_SHOT=out.png cargo run # one scene: briefing | combat | eva | overload | hangar
+HZ_SCENE=combat HZ_SHOT=out.png cargo run # one scene: briefing | combat | quad | eva | overload | hangar
+HZ_SCENE=play HZ_SHOT=docs/play HZ_FRAMES=8 HZ_EVERY=30 cargo run   # autopilot plays; frame strip
+python3 -I scripts/strip.py docs/play strip.png 4                    # tile the frames
 ```
 
 ## Code map
 
 ```
 src/main.rs         app, states (Boot → Cockpit ⇄ Hangar), mission start / flow
-src/sim.rs          subsystems, power bus, heat, enemies, drones, shells, pilot EVA
+src/sim.rs          subsystems, power bus, heat, cameras + radar estimates, enemies, pilot EVA
+src/autopilot.rs    scripted pilot for tests and the play scene
 src/campaign.rs     scars, salvage catalogue, makers, originality
 src/art.rs          pixel sprites (text grids), hull map, procedural city + hangar
 src/ui/mod.rs       fonts, palette, riveted panels, pixel buttons and LED bars

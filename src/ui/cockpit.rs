@@ -19,14 +19,13 @@ use crate::{Flow, FlowRequest};
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum CamMode {
     #[default]
-    Auto,
-    External,
+    Single,
+    Quad,
     Interior,
 }
 
 #[derive(Default)]
 pub struct CockpitUi {
-    pub cam_bearing: f32,
     pub cam_mode: CamMode,
     pub selected_sys: usize,
 }
@@ -112,14 +111,15 @@ pub fn cockpit_ui(
     let h = r.height();
     let top = Rect::from_min_size(r.min + Vec2::new(8.0, 6.0), Vec2::new(w - 16.0, 44.0));
     let main_y0 = r.min.y + 56.0;
-    let bottom_h = 236.0;
+    let bottom_h = 196.0;
     let main_y1 = r.max.y - bottom_h - 14.0;
-    let left_w = 396.0;
-    let right_w = 516.0;
+    let left_w = 330.0;
+    let right_w = 410.0;
     let left = Rect::from_min_max(Pos2::new(r.min.x + 8.0, main_y0), Pos2::new(r.min.x + 8.0 + left_w, main_y1));
     let right = Rect::from_min_max(Pos2::new(r.max.x - 8.0 - right_w, main_y0), Pos2::new(r.max.x - 8.0, main_y1));
     let center = Rect::from_min_max(Pos2::new(left.max.x + 8.0, main_y0), Pos2::new(right.min.x - 8.0, main_y1));
-    let feed_h = (center.height() * 0.58).max(200.0);
+    // The camera wall is the hero: as tall as the full-width feed needs, the rest is weapons.
+    let feed_h = ((center.width() - 20.0) / FEED_W * FEED_H + 38.0).min(center.height() - 120.0);
     let feed = Rect::from_min_size(center.min, Vec2::new(center.width(), feed_h));
     let weapons = Rect::from_min_max(Pos2::new(center.min.x, feed.max.y + 8.0), center.max);
     let hull = Rect::from_min_max(Pos2::new(r.min.x + 8.0, main_y1 + 8.0), Pos2::new(left.max.x, r.max.y - 6.0));
@@ -172,6 +172,13 @@ fn handle_keys(keys: &ButtonInput<KeyCode>, mech: &mut Mech, mission: &mut Missi
         cmds.ecm = true;
     }
     if keys.just_pressed(KeyCode::Tab) {
+        let left = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        mech.active_cam = (mech.active_cam + if left { CAMERAS - 1 } else { 1 }) % CAMERAS;
+    }
+    if keys.just_pressed(KeyCode::KeyC) {
+        mech.quad_view = !mech.quad_view;
+    }
+    if keys.just_pressed(KeyCode::KeyT) {
         let mut vis: Vec<&(Entity, Enemy)> = scene.enemies.iter().filter(|(_, e)| e.dist <= mech.stats.radar_range).collect();
         vis.sort_by(|a, b| a.1.dist.total_cmp(&b.1.dist));
         if !vis.is_empty() {
@@ -231,14 +238,15 @@ fn top_bar(ui: &mut Ui, rect: Rect, mech: &Mech, mission: &mut Mission, scene: &
     }
 
     // Alarm lamps
-    let lamps: [(&str, bool, Color32); 5] = [
+    let lamps: [(&str, bool, Color32); 6] = [
+        ("CAM", mech.cameras_up() < CAMERAS, AMBER),
         ("OVLD", mech.overload.is_some(), RED),
         ("HEAT", mech.heat > 80.0, AMBER),
         ("BREACH", mech.breach.is_some() || mech.interlocks_failed, RED),
         ("BOARD", !scene.boarders.is_empty(), PURPLE),
         ("INCOMING", !scene.shells.is_empty(), YELLOW),
     ];
-    let mut x = rect.max.x - 5.0 * 74.0 - 60.0;
+    let mut x = rect.max.x - 6.0 * 74.0 - 60.0;
     for (label, on, c) in lamps {
         lamp(&p, Rect::from_min_size(Pos2::new(x, rect.min.y + 9.0), Vec2::new(70.0, 26.0)), label, on, c, scene.t);
         x += 74.0;
@@ -373,6 +381,23 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
         }
     }
 
+    // Quadrants with no working camera: radar-only.
+    for cam in 0..CAMERAS {
+        if mech.camera_ok(cam) {
+            continue;
+        }
+        let a0 = camera_bearing(cam) - CAMERA_FOV / 2.0;
+        let mut pts = vec![c];
+        for i in 0..=12 {
+            pts.push(polar(c, 1.0, a0 + CAMERA_FOV * i as f32 / 12.0, rad));
+        }
+        p.add(egui::Shape::convex_polygon(pts, Color32::from_rgba_unmultiplied(120, 30, 30, 50), Stroke::NONE));
+        let lp = polar(c, 1.0, camera_bearing(cam), rad * 0.82);
+        if (scene.t * 1.2).fract() < 0.7 {
+            text(&p, lp, Align2::CENTER_CENTER, "NO CAM", pix(8.0), RED.gamma_multiply(0.8));
+        }
+    }
+
     // Incoming shells
     for s in &scene.shells {
         let frac = (s.t / s.flight).clamp(0.0, 1.0);
@@ -387,8 +412,9 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
     let click = resp.clicked().then(|| resp.interact_pointer_pos()).flatten();
     let mut best: Option<(Entity, f32)> = None;
     for (ent, e) in &scene.enemies {
-        let pos = polar(c, k, e.angle, e.dist.min(RADAR_SCALE_M));
-        let since = (mech.sweep - e.angle).rem_euclid(TAU);
+        // Blips sit where the radar thinks the contact is.
+        let pos = polar(c, k, e.est_angle, e.est_dist.min(RADAR_SCALE_M));
+        let since = (mech.sweep - e.est_angle).rem_euclid(TAU);
         let glow = 1.0 - since / TAU * 0.65;
         let visible = e.dist <= st.radar_range;
         if !visible {
@@ -400,13 +426,19 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
             }
             continue;
         }
-        let identified = e.dist <= st.id_range;
+        let identified = e.dist <= st.id_range || e.covered;
+        let dimmer = if e.covered { 1.0 } else { 0.7 };
         if identified {
-            let col = kind_color(e.kind).gamma_multiply(glow);
+            let col = kind_color(e.kind).gamma_multiply(glow * dimmer);
             paint_icon(&p, pos, kind_icon(e.kind), 2.0, if e.hit_flash > 0.0 { Color32::WHITE } else { col });
             text(&p, pos + Vec2::new(10.0, -10.0), Align2::LEFT_BOTTOM, format!("{}-{:02}", e.kind.callsign(), e.serial), mono(16.0), col);
         } else {
-            paint_icon(&p, pos, &ICON_UNKNOWN, 2.0, AMBER.gamma_multiply(glow));
+            paint_icon(&p, pos, &ICON_UNKNOWN, 2.0, AMBER.gamma_multiply(glow * dimmer));
+        }
+        if !e.covered {
+            // Uncertainty: the blip could be anywhere on this arc.
+            let er = (e.err * e.est_dist * k).max(5.0);
+            pixel_ring(&p, pos, er, AMBER.gamma_multiply(0.45), true);
         }
         if Some(*ent) == mech.target {
             let blink = (scene.t * 4.0).fract() < 0.7;
@@ -478,11 +510,12 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
         paint_icon(&lp, Pos2::new(row.min.x + 12.0, row.center().y), if identified { kind_icon(e.kind) } else { &ICON_UNKNOWN }, 2.0, col);
         let name = if identified { format!("{}-{:02}", e.kind.callsign(), e.serial) } else { "????".into() };
         let class = if identified { e.kind.name() } else { "UNKNOWN" };
+        let _ = class;
         text(&lp, Pos2::new(row.min.x + 26.0, row.center().y), Align2::LEFT_CENTER, name, mono(19.0), col);
-        text(&lp, Pos2::new(row.min.x + 96.0, row.center().y), Align2::LEFT_CENTER, class, mono(19.0), TEXT);
-        text(&lp, Pos2::new(row.min.x + 250.0, row.center().y), Align2::RIGHT_CENTER, format!("{:.0}m", e.dist), mono(19.0), TEXT);
-        text(&lp, Pos2::new(row.min.x + 290.0, row.center().y), Align2::RIGHT_CENTER, format!("{:03.0}", bearing_deg(e.angle)), mono(19.0), DIM);
-        let hb = Rect::from_min_size(Pos2::new(row.min.x + 300.0, row.center().y - 5.0), Vec2::new(row.width() - 306.0, 10.0));
+        text(&lp, Pos2::new(row.min.x + 140.0, row.center().y), Align2::RIGHT_CENTER, format!("{:.0}m", e.est_dist), mono(19.0), TEXT);
+        let cov = if e.covered { ("CAM".to_string(), GREEN.gamma_multiply(0.8)) } else { (format!("±{:.0}°", e.err.to_degrees()), AMBER) };
+        text(&lp, Pos2::new(row.min.x + 196.0, row.center().y), Align2::RIGHT_CENTER, cov.0, mono(19.0), cov.1);
+        let hb = Rect::from_min_size(Pos2::new(row.min.x + 206.0, row.center().y - 5.0), Vec2::new(row.width() - 212.0, 10.0));
         if identified {
             seg_bar(&lp, hb, e.hp / e.max_hp, 8, col);
         } else {
@@ -500,7 +533,7 @@ fn radar_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, campaign: &Campaign, sc
 // --------------------------------------------------------------------------------------
 
 const FEED_W: f32 = 320.0;
-const FEED_H: f32 = 150.0;
+const FEED_H: f32 = 176.0;
 
 #[allow(clippy::too_many_arguments)]
 fn feed_panel(
@@ -514,73 +547,137 @@ fn feed_panel(
     scene: &Scene,
     st: &mut CockpitUi,
 ) {
-    let interior = match st.cam_mode {
-        CamMode::Interior => true,
-        CamMode::External => false,
-        CamMode::Auto => !mech.pilot.in_seat(),
+    if mech.quad_view && st.cam_mode == CamMode::Single {
+        st.cam_mode = CamMode::Quad;
+    } else if !mech.quad_view && st.cam_mode == CamMode::Quad {
+        st.cam_mode = CamMode::Single;
+    }
+    let interior = st.cam_mode == CamMode::Interior || !mech.pilot.in_seat();
+    let title = if interior {
+        "INTERIOR CUTAWAY".to_string()
+    } else if st.cam_mode == CamMode::Quad {
+        format!("CAMERA WALL — {} OF {} FEEDS LIVE", mech.cameras_up(), CAMERAS)
+    } else {
+        format!("CAMERA {} · {} {:03.0}", mech.active_cam + 1, CAMERA_NAMES[mech.active_cam], camera_bearing(mech.active_cam).to_degrees())
     };
-    let title = if interior { "INTERIOR CUTAWAY" } else { "EXTERNAL CAMERA FEED" };
-    let inner = panel_frame(ui, rect, title, None);
+    let inner = panel_frame(ui, rect, &title, None);
 
     // Mode tabs in the header
-    let tabs = [("AUTO", CamMode::Auto), ("EXT", CamMode::External), ("INT", CamMode::Interior)];
-    let mut x = rect.max.x - 12.0 - 3.0 * 52.0;
+    let tabs = [("SINGLE", CamMode::Single), ("QUAD [C]", CamMode::Quad), ("INT", CamMode::Interior)];
+    let mut x = rect.max.x - 12.0 - 3.0 * 64.0;
     for (lbl, mode) in tabs {
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x, rect.min.y + 3.0), Vec2::new(48.0, 18.0)), lbl, GREEN, true, st.cam_mode == mode).clicked() {
+        if pbutton(ui, Rect::from_min_size(Pos2::new(x, rect.min.y + 3.0), Vec2::new(60.0, 18.0)), lbl, GREEN, true, st.cam_mode == mode).clicked() {
             st.cam_mode = mode;
+            mech.quad_view = mode == CamMode::Quad;
         }
-        x += 52.0;
+        x += 64.0;
+    }
+    // Camera selectors
+    if !interior {
+        let mut x = rect.min.x + 14.0 + title.len() as f32 * 8.6 + 30.0;
+        for cam in 0..CAMERAS {
+            let ok = mech.camera_ok(cam);
+            let col = if ok { GREEN } else { RED };
+            let lbl = format!("{} {}", cam + 1, CAMERA_NAMES[cam]);
+            if pbutton(ui, Rect::from_min_size(Pos2::new(x, rect.min.y + 3.0), Vec2::new(62.0, 18.0)), &lbl, col, true, mech.active_cam == cam).clicked() {
+                mech.active_cam = cam;
+            }
+            x += 66.0;
+        }
     }
 
-    let scale = (inner.width() / FEED_W).min(inner.height() / FEED_H).max(1.0);
-    let fr = Rect::from_center_size(inner.center(), Vec2::new(FEED_W * scale, FEED_H * scale));
-    let p = ui.painter_at(fr);
     let painter_bg = ui.painter_at(inner);
     painter_bg.rect_filled(inner, 0.0, Color32::BLACK);
 
     if interior {
+        let scale = (inner.width() / FEED_W).min(inner.height() / FEED_H).max(1.0);
+        let fr = Rect::from_center_size(inner.center(), Vec2::new(FEED_W * scale, FEED_H * scale));
+        let p = ui.painter_at(fr);
         interior_view(ui, &p, fr, scale, art, mech, cmds, scene);
+        scanlines(&p, fr, 46);
+        vignette(&p, fr);
+    } else if st.cam_mode == CamMode::Quad {
+        let gap = 4.0;
+        let cw = (inner.width() - gap) / 2.0;
+        let ch = (inner.height() - gap) / 2.0;
+        let scale = (cw / FEED_W).min(ch / FEED_H);
+        for cam in 0..CAMERAS {
+            let (cx, cy) = (cam % 2, cam / 2);
+            let cell = Rect::from_min_size(inner.min + Vec2::new(cx as f32 * (cw + gap), cy as f32 * (ch + gap)), Vec2::new(cw, ch));
+            let fr = Rect::from_center_size(cell.center(), Vec2::new(FEED_W * scale, FEED_H * scale));
+            let p = ui.painter_at(fr);
+            cam_view(&p, fr, scale, cam, art, mech, fx, campaign, scene);
+            scanlines(&p, fr, 46);
+            vignette(&p, fr);
+            if mech.active_cam == cam {
+                p.rect_stroke(fr, CornerRadius::ZERO, Stroke::new(2.0, AMBER), StrokeKind::Inside);
+            }
+            if ui.interact(fr, ui.id().with(("camcell", cam)), Sense::click()).clicked() {
+                mech.active_cam = cam;
+            }
+        }
     } else {
-        external_view(&p, fr, scale, art, mech, fx, campaign, scene, st);
+        let scale = (inner.width() / FEED_W).min(inner.height() / FEED_H).max(1.0);
+        let fr = Rect::from_center_size(inner.center(), Vec2::new(FEED_W * scale, FEED_H * scale));
+        let p = ui.painter_at(fr);
+        cam_view(&p, fr, scale, mech.active_cam, art, mech, fx, campaign, scene);
+        scanlines(&p, fr, 46);
+        vignette(&p, fr);
     }
-    scanlines(&p, fr, 46);
-    // Vignette corners
+}
+
+fn vignette(p: &egui::Painter, fr: Rect) {
     for i in 0..6 {
         let a = 26 - i * 4;
         p.rect_stroke(fr.shrink(i as f32 * 3.0), CornerRadius::ZERO, Stroke::new(3.0, Color32::from_black_alpha(a as u8 * 4)), StrokeKind::Inside);
     }
 }
 
+/// One fixed hull camera, looking down its quadrant.
 #[allow(clippy::too_many_arguments)]
-fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx: &Effects, campaign: &Campaign, scene: &Scene, st: &mut CockpitUi) {
-    // Camera follows the selected target; otherwise slowly scans.
-    let want = mech
-        .target
-        .and_then(|t| scene.enemies.iter().find(|(e, _)| *e == t))
-        .map(|(_, e)| e.angle)
-        .unwrap_or(st.cam_bearing + 0.0015);
-    st.cam_bearing += angle_diff(want, st.cam_bearing) * 0.08;
-    st.cam_bearing = st.cam_bearing.rem_euclid(TAU);
-    let bearing = st.cam_bearing;
-    let fov = PI / 2.0;
+fn cam_view(p: &egui::Painter, fr: Rect, s: f32, cam: usize, art: &Art, mech: &Mech, fx: &Effects, campaign: &Campaign, scene: &Scene) {
+    let bearing = camera_bearing(cam);
+    let fov = CAMERA_FOV;
     let px = |x: f32, y: f32| fr.min + Vec2::new(x * s, y * s);
+    let frame_i = (scene.t * 20.0) as i32;
+    let label = format!("CAM {} · {} {:03.0}", cam + 1, CAMERA_NAMES[cam], bearing.to_degrees());
+
+    // Dead camera: nothing but noise.
+    if !mech.camera_ok(cam) {
+        p.rect_filled(fr, 0.0, Color32::from_rgb(8, 8, 10));
+        for i in 0..1400 {
+            let h = hash2(i, frame_i, 17 + cam as u32);
+            let x = (h % FEED_W as u32) as f32;
+            let y = ((h >> 9) % FEED_H as u32) as f32;
+            let v = ((h >> 20) % 70) as u8 + 10;
+            p.rect_filled(Rect::from_min_size(px(x, y), Vec2::new(s * 2.0, s)), 0.0, Color32::from_rgb(v, v, v));
+        }
+        let band = ((frame_i / 2) % FEED_H as i32) as f32;
+        p.rect_filled(Rect::from_min_size(px(0.0, band), Vec2::new(fr.width(), 8.0 * s)), 0.0, Color32::from_white_alpha(14));
+        if (scene.t * 1.5).fract() < 0.7 {
+            text(p, fr.center(), Align2::CENTER_CENTER, "NO SIGNAL", pix(16.0 * s.min(2.0) / 1.3), RED);
+        }
+        let why = if mech.hp[Section::Sensors.idx()] <= 0.0 { "SENSOR HEAD DESTROYED" } else { "OPTICS DESTROYED — HAND REPAIR AT SENSOR HEAD" };
+        text(p, fr.center() + Vec2::new(0.0, 16.0 * s), Align2::CENTER_CENTER, why, mono(14.0 * s.min(2.0)), DIM);
+        text(p, fr.min + Vec2::new(10.0, 12.0), Align2::LEFT_CENTER, label, mono(18.0), RED);
+        return;
+    }
 
     // Panorama: far layer scrolls at 60% of the bearing for parallax, near layer on top.
-    let v1 = FEED_H / art::PANO_H as f32;
     if let Some(tex) = &art.pano_far {
         let u0 = (bearing * 0.6 - fov / 2.0) / TAU;
-        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + fov / TAU, v1)), Color32::WHITE);
+        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + fov / TAU, 1.0)), Color32::WHITE);
     }
     if let Some(tex) = &art.pano_near {
         let u0 = (bearing - fov / 2.0) / TAU;
-        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + fov / TAU, v1)), Color32::WHITE);
+        p.image(tex.id(), fr, Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + fov / TAU, 1.0)), Color32::WHITE);
     }
     // Drifting ash and embers
     for i in 0..40 {
-        let h = hash2(i, 0, 23);
+        let h = hash2(i, cam as i32, 23);
         let speed = 4.0 + (h % 7) as f32;
         let y = ((h >> 8) as f32 * 0.37 + scene.t as f32 * speed) % FEED_H;
-        let x = ((h >> 16) as f32 * 0.53 + (scene.t as f32 * 0.7 + i as f32).sin() * 6.0 - bearing.to_degrees() * 2.0).rem_euclid(FEED_W);
+        let x = ((h >> 16) as f32 * 0.53 + (scene.t as f32 * 0.7 + i as f32).sin() * 6.0).rem_euclid(FEED_W);
         let ember = h % 9 == 0;
         let c = if ember { Color32::from_rgb(255, 150, 60) } else { Color32::from_rgb(110, 96, 100) };
         p.rect_filled(Rect::from_min_size(px(x.floor(), y.floor()), Vec2::splat(s)), 0.0, c);
@@ -589,7 +686,7 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
         let rel = angle_diff(angle, bearing);
         (rel.abs() < fov * 0.6).then(|| FEED_W / 2.0 + rel / (fov / 2.0) * (FEED_W / 2.0))
     };
-    let ground_y = |dist: f32| art::HORIZON as f32 + (1.0 - (dist / 1100.0).clamp(0.0, 1.0)).powf(1.6) * 44.0;
+    let ground_y = |dist: f32| art::HORIZON as f32 + (1.0 - (dist / 1100.0).clamp(0.0, 1.0)).powf(1.6) * 60.0;
 
     // Enemies, far to near
     let mut list: Vec<&(Entity, Enemy)> = scene.enemies.iter().collect();
@@ -630,16 +727,36 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
     for sh in &scene.shells {
         if let Some(x) = to_x(sh.angle) {
             let f = sh.t / sh.flight;
-            let y = 10.0 + f * 120.0;
+            let y = 10.0 + f * (FEED_H - 30.0);
             let xx = x + (FEED_W / 2.0 - x) * f;
             p.rect_filled(Rect::from_min_size(px(xx, y), Vec2::splat(2.0 * s)), 0.0, YELLOW);
             p.rect_filled(Rect::from_min_size(px(xx, y - 3.0), Vec2::new(2.0 * s, 3.0 * s)), 0.0, Color32::from_rgba_unmultiplied(255, 150, 60, 120));
         }
     }
 
+    // Where the arms sit in this camera: both forward, one each to the sides, none aft.
+    let rail_at = match cam {
+        0 => Some((FEED_W - art.sprites.arm_rail.w as f32 + 6.0, false)),
+        1 => Some((-6.0, true)),
+        _ => None,
+    };
+    let ac_at = match cam {
+        0 => Some((-6.0, true)),
+        3 => Some((FEED_W - art.sprites.arm_ac.w as f32 + 6.0, false)),
+        _ => None,
+    };
+    let rail_origin = match rail_at {
+        Some((_, false)) => px(FEED_W - 52.0, FEED_H),
+        Some((_, true)) => px(52.0, FEED_H),
+        None => px(FEED_W / 2.0, FEED_H + 20.0),
+    };
+    let ac_origin = match ac_at {
+        Some((_, true)) => px(52.0, FEED_H),
+        Some((_, false)) => px(FEED_W - 52.0, FEED_H),
+        None => px(FEED_W / 2.0, FEED_H + 20.0),
+    };
+
     // Effects
-    let rail_origin = px(268.0, 150.0);
-    let ac_origin = px(52.0, 150.0);
     for f in &fx.list {
         let life = f.t / f.ttl;
         let target = to_x(f.angle).map(|x| px(x, ground_y(f.dist) - 10.0));
@@ -656,8 +773,8 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
                     let a = ac_origin + (t - ac_origin) * (0.2 + life * 0.8);
                     let b = ac_origin + (t - ac_origin) * (life * 0.8);
                     p.line_segment([b, a], Stroke::new(1.5 * s, YELLOW));
+                    p.rect_filled(Rect::from_center_size(ac_origin, Vec2::splat(6.0 * s * (1.0 - life))), 0.0, Color32::from_rgb(255, 230, 140));
                 }
-                p.rect_filled(Rect::from_center_size(ac_origin, Vec2::splat(6.0 * s * (1.0 - life))), 0.0, Color32::from_rgb(255, 230, 140));
             }
             FxKind::Explosion | FxKind::Muzzle => {
                 if let Some(t) = target {
@@ -666,8 +783,9 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
                 }
             }
             FxKind::ShellImpact => {
-                let x = to_x(f.angle).unwrap_or(FEED_W / 2.0);
-                boom(p, px(x, 138.0), s * 4.0, life, 77);
+                if let Some(x) = to_x(f.angle) {
+                    boom(p, px(x, FEED_H - 12.0), s * 4.0, life, 77);
+                }
             }
             FxKind::Ecm => {
                 let r = life * fr.width();
@@ -676,17 +794,24 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
         }
     }
 
-    // Cockpit framing: the mech's own arms in the lower corners, faceplates in maker colours.
+    // Cockpit framing: the mech's own arms, faceplates in maker colours.
     let rail_col = rgb(campaign.makers[Section::Railgun.idx()].accent());
     let ac_col = rgb(campaign.makers[Section::Autocannon.idx()].accent());
-    let recoil = if mech.shake > 0.3 { (mech.shake * 3.0).round() } else { 0.0 };
-    let aw = art.sprites.arm_rail.w as f32;
     let ah = art.sprites.arm_rail.h as f32;
-    art.sprites.arm_rail.paint_accent(p, px(FEED_W - aw + 6.0 + recoil, FEED_H - ah + 4.0 + recoil), s, 0.0, None, false, Some(rail_col));
-    let ac_jitter = if mech.ac_firing { ((scene.t * 60.0) as i32 % 2) as f32 } else { 0.0 };
-    art.sprites.arm_ac.paint_accent(p, px(-6.0, FEED_H - ah + 4.0 + ac_jitter), s, 0.0, None, true, Some(ac_col));
+    if let Some((x, flip)) = rail_at {
+        let recoil = if mech.shake > 0.3 { (mech.shake * 3.0).round() } else { 0.0 };
+        let dead = mech.hp[Section::Railgun.idx()] <= 0.0;
+        let tint = dead.then_some(Color32::from_rgb(90, 70, 70));
+        art.sprites.arm_rail.paint_accent(p, px(x + recoil, FEED_H - ah + 4.0 + recoil), s, 0.0, tint, flip, Some(if dead { DIM } else { rail_col }));
+    }
+    if let Some((x, flip)) = ac_at {
+        let jitter = if mech.ac_firing { ((scene.t * 60.0) as i32 % 2) as f32 } else { 0.0 };
+        let dead = mech.hp[Section::Autocannon.idx()] <= 0.0;
+        let tint = dead.then_some(Color32::from_rgb(90, 70, 70));
+        art.sprites.arm_ac.paint_accent(p, px(x, FEED_H - ah + 4.0 + jitter), s, 0.0, tint, flip, Some(if dead { DIM } else { ac_col }));
+    }
 
-    // HUD: bearing tape, crosshair, REC
+    // HUD: bearing tape, crosshair, label
     let tape_y = 4.0;
     for i in -9..=9 {
         let deg = (bearing.to_degrees() / 5.0).round() * 5.0 + i as f32 * 5.0;
@@ -706,28 +831,32 @@ fn external_view(p: &egui::Painter, fr: Rect, s: f32, art: &Art, mech: &Mech, fx
             text(p, px(x, tape_y + 5.0), Align2::CENTER_TOP, lbl, mono(16.0), GREEN);
         }
     }
-    let cc = px(FEED_W / 2.0, 75.0);
+    let cc = px(FEED_W / 2.0, FEED_H * 0.5);
     for (a, b) in [(Vec2::new(-14.0, 0.0), Vec2::new(-5.0, 0.0)), (Vec2::new(5.0, 0.0), Vec2::new(14.0, 0.0)), (Vec2::new(0.0, -14.0), Vec2::new(0.0, -5.0)), (Vec2::new(0.0, 5.0), Vec2::new(0.0, 14.0))] {
         p.line_segment([cc + a, cc + b], Stroke::new(1.0, GREEN.gamma_multiply(0.7)));
     }
     if (scene.t * 1.5).fract() < 0.6 {
-        p.circle_filled(fr.min + Vec2::new(16.0, 48.0), 5.0, RED);
+        p.circle_filled(fr.min + Vec2::new(16.0, fr.height() - 14.0), 4.0, RED);
     }
-    text(p, fr.min + Vec2::new(26.0, 48.0), Align2::LEFT_CENTER, "CAM-1", mono(18.0), GREEN);
+    text(p, fr.min + Vec2::new(26.0, fr.height() - 14.0), Align2::LEFT_CENTER, label, mono(18.0), GREEN);
+    let cam_hp = mech.cameras[cam] / CAMERA_HP;
+    if cam_hp < 0.6 {
+        text(p, fr.right_top() + Vec2::new(-10.0, fr.height() - 14.0), Align2::RIGHT_CENTER, format!("OPTICS {:.0}%", cam_hp * 100.0), mono(18.0), AMBER);
+    }
 
-    // Damaged sensors / heat
+    // Damaged sensors / weak optics / heat
     let sf = mech.frac(Section::Sensors);
-    let frame_i = (scene.t * 20.0) as i32;
-    let static_n = ((1.0 - sf) * 500.0) as i32 + if mech.shake > 0.5 { 300 } else { 0 };
+    let weak = (1.0 - cam_hp).max(1.0 - sf);
+    let static_n = (weak * 500.0) as i32 + if mech.shake > 0.5 { 300 } else { 0 };
     for i in 0..static_n {
         let h = hash2(i, frame_i, 17);
-        let x = (h % 320) as f32;
-        let y = ((h >> 9) % 150) as f32;
+        let x = (h % FEED_W as u32) as f32;
+        let y = ((h >> 9) % FEED_H as u32) as f32;
         let v = ((h >> 20) % 200) as u8 + 40;
         p.rect_filled(Rect::from_min_size(px(x, y), Vec2::new(s * 2.0, s)), 0.0, Color32::from_rgb(v, v, v));
     }
-    if sf < 0.3 && (frame_i / 5) % 7 == 0 {
-        let y = ((hash2(frame_i, 1, 2) % 150) as f32).round();
+    if weak > 0.5 && (frame_i / 5) % 7 == 0 {
+        let y = ((hash2(frame_i, 1, 2) % FEED_H as u32) as f32).round();
         p.rect_filled(Rect::from_min_size(px(0.0, y), Vec2::new(fr.width(), 6.0 * s)), 0.0, Color32::from_white_alpha(40));
     }
     if mech.heat > 85.0 {
@@ -911,52 +1040,51 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
     let st = mech.stats;
     let seated = mech.pilot.in_seat();
     let target = mech.target.and_then(|t| scene.enemies.iter().find(|(e, _)| *e == t)).map(|(_, e)| e.clone());
+    let bh = 26.0;
 
     // --- Railgun -------------------------------------------------------------------------
     {
         let r = cards[0];
         let maker = campaign.makers[Section::Railgun.idx()];
-        station_card(ui, r, "RAILGUN", maker);
+        let dead = mech.hp[Section::Railgun.idx()] <= 0.0;
+        station_card(ui, r, "RAILGUN", maker, dead);
         let p = ui.painter_at(r);
         let x = r.min.x + 8.0;
-        let mut y = r.min.y + 26.0;
         let charge = mech.rail_charge;
-        let ready = charge >= 1.0;
+        let ready = charge >= 1.0 && !dead;
         let lock = target.as_ref().is_some_and(|e| e.dist <= st.radar_range);
-        let status = if !seated {
+        let radar_only = target.as_ref().is_some_and(|e| !e.covered);
+        let status = if dead {
+            ("MOUNT DESTROYED", RED)
+        } else if !seated {
             ("NO PILOT", RED)
         } else if st.rail_rate <= 0.0 && !ready {
             ("NO POWER", RED)
         } else if !ready {
             ("CHARGING", AMBER)
         } else if !lock {
-            ("READY / NO LOCK", AMBER)
+            ("NO LOCK", AMBER)
+        } else if radar_only {
+            ("RADAR LOCK", AMBER)
         } else {
-            ("READY", GREEN)
+            ("VISUAL LOCK", GREEN)
         };
-        text(&p, Pos2::new(x, y), Align2::LEFT_TOP, "CAPACITOR", pix(9.0), DIM);
-        text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, status.0, pix(9.0), status.1);
-        y += 14.0;
-        seg_bar(&p, Rect::from_min_size(Pos2::new(x, y), Vec2::new(r.width() - 16.0, 22.0)), charge, 20, if ready { CYAN } else { CYAN.gamma_multiply(0.6) });
-        y += 28.0;
-        let eta = if ready { "--".into() } else if st.rail_rate > 0.0 { format!("{:.1}s", (1.0 - charge) / st.rail_rate) } else { "∞".into() };
-        let hitp = 0.92 * (0.5 + 0.5 * mech.eff(Section::Sensors)) - if target.as_ref().is_some_and(|e| e.kind == EnemyKind::Scout) { 0.15 } else { 0.0 };
-        for (k, v) in [
-            ("ETA", eta),
-            ("HEAT/SHOT", format!("+{:.0}", 22.0 + campaign.mods.rail_heat)),
-            ("HIT CHANCE", if lock { format!("{:.0}%", hitp * 100.0) } else { "--".into() }),
-        ] {
-            text(&p, Pos2::new(x, y), Align2::LEFT_TOP, k, mono(18.0), DIM);
-            text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, v, mono(18.0), TEXT);
-            y += 17.0;
-        }
-        let by = r.max.y - 44.0;
-        let fire = Rect::from_min_size(Pos2::new(x, by), Vec2::new(r.width() * 0.62, 36.0));
+        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 30.0), Align2::RIGHT_CENTER, status.0, pix(9.0), status.1);
+        text(&p, Pos2::new(x, r.min.y + 30.0), Align2::LEFT_CENTER, "CAPACITOR", pix(9.0), DIM);
+        seg_bar(&p, Rect::from_min_size(Pos2::new(x, r.min.y + 38.0), Vec2::new(r.width() - 16.0, 12.0)), charge, 20, if ready { CYAN } else { CYAN.gamma_multiply(0.6) });
+        let eta = if ready { "READY".into() } else if st.rail_rate > 0.0 { format!("{:.1}s", (1.0 - charge) / st.rail_rate) } else { "∞".into() };
+        let hitp = (0.92 * (0.5 + 0.5 * mech.eff(Section::Sensors)) - if target.as_ref().is_some_and(|e| e.kind == EnemyKind::Scout) { 0.15 } else { 0.0 })
+            * target.as_ref().map(|e| e.aim_factor()).unwrap_or(1.0);
+        let hit = if lock { format!("{:.0}% HIT", hitp * 100.0) } else { "--".into() };
+        text(&p, Pos2::new(x, r.min.y + 60.0), Align2::LEFT_CENTER, format!("{eta}  ·  +{:.0} HEAT", 22.0 + campaign.mods.rail_heat), mono(18.0), TEXT);
+        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 60.0), Align2::RIGHT_CENTER, hit, mono(18.0), if radar_only { AMBER } else { TEXT });
+        let by = r.max.y - bh - 6.0;
+        let fire = Rect::from_min_size(Pos2::new(x, by), Vec2::new(r.width() * 0.62, bh));
         if pbutton(ui, fire, "FIRE [SPACE]", RED, seated && ready && lock && mech.scram_t <= 0.0, ready && lock).clicked() {
             cmds.fire_rail = true;
         }
-        let auto = Rect::from_min_max(Pos2::new(fire.max.x + 6.0, by), Pos2::new(r.max.x - 8.0, by + 36.0));
-        if pbutton(ui, auto, "AUTO", AMBER, true, mech.rail_auto).clicked() {
+        let auto = Rect::from_min_max(Pos2::new(fire.max.x + 6.0, by), Pos2::new(r.max.x - 8.0, by + bh));
+        if pbutton(ui, auto, "AUTO", AMBER, !dead, mech.rail_auto).clicked() {
             mech.rail_auto = !mech.rail_auto;
         }
     }
@@ -965,11 +1093,13 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
     {
         let r = cards[1];
         let maker = campaign.makers[Section::Autocannon.idx()];
-        station_card(ui, r, "AUTOCANNON", maker);
+        let dead = mech.hp[Section::Autocannon.idx()] <= 0.0;
+        station_card(ui, r, "AUTOCANNON", maker, dead);
         let p = ui.painter_at(r);
         let x = r.min.x + 8.0;
-        let mut y = r.min.y + 26.0;
-        let status = if !seated {
+        let status = if dead {
+            ("MOUNT DESTROYED", RED)
+        } else if !seated {
             ("NO PILOT", RED)
         } else if st.ac_dps <= 0.0 {
             ("NO POWER", RED)
@@ -980,36 +1110,29 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
         } else {
             ("TRACKING", GREEN)
         };
-        text(&p, Pos2::new(x, y), Align2::LEFT_TOP, "BARREL", pix(9.0), DIM);
-        text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, status.0, pix(9.0), status.1);
-        y += 14.0;
-        // Spinning barrel / ammo belt animation
-        let belt = Rect::from_min_size(Pos2::new(x, y), Vec2::new(r.width() - 16.0, 22.0));
+        text(&p, Pos2::new(x, r.min.y + 30.0), Align2::LEFT_CENTER, "BELT", pix(9.0), DIM);
+        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 30.0), Align2::RIGHT_CENTER, status.0, pix(9.0), status.1);
+        // Ammo belt animation
+        let belt = Rect::from_min_size(Pos2::new(x, r.min.y + 38.0), Vec2::new(r.width() - 16.0, 12.0));
         p.rect_filled(belt, 0.0, EDGE_LO);
         let offset = if mech.ac_firing { ((scene.t * 40.0) % 10.0) as f32 } else { 0.0 };
         let mut bx = belt.min.x + 3.0 - offset;
         while bx < belt.max.x - 6.0 {
             if bx > belt.min.x {
-                p.rect_filled(Rect::from_min_size(Pos2::new(bx, belt.min.y + 4.0), Vec2::new(5.0, 14.0)), 0.0, Color32::from_rgb(190, 150, 60));
-                p.rect_filled(Rect::from_min_size(Pos2::new(bx, belt.min.y + 4.0), Vec2::new(5.0, 4.0)), 0.0, Color32::from_rgb(230, 200, 120));
+                let c = if dead { DIM } else { Color32::from_rgb(190, 150, 60) };
+                p.rect_filled(Rect::from_min_size(Pos2::new(bx, belt.min.y + 2.0), Vec2::new(5.0, 8.0)), 0.0, c);
+                p.rect_filled(Rect::from_min_size(Pos2::new(bx, belt.min.y + 2.0), Vec2::new(5.0, 3.0)), 0.0, c.gamma_multiply(1.3));
             }
             bx += 10.0;
         }
-        y += 28.0;
-        for (k, v) in [
-            ("DAMAGE", format!("{:.0}/s", st.ac_dps)),
-            ("HEAT", format!("+{:.1}/s firing", st.eff[Sys::Autocannon.idx()] * 0.14)),
-        ] {
-            text(&p, Pos2::new(x, y), Align2::LEFT_TOP, k, mono(18.0), DIM);
-            text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, v, mono(18.0), TEXT);
-            y += 17.0;
-        }
-        let by = r.max.y - 44.0;
+        let blind = target.as_ref().is_some_and(|e| !e.covered && e.dist <= AC_RANGE);
+        text(&p, Pos2::new(x, r.min.y + 60.0), Align2::LEFT_CENTER, format!("{:.0}/s{}  ·  +{:.1} HEAT", st.ac_dps * if blind { 0.5 } else { 1.0 }, if blind { " (RADAR)" } else { "" }, st.eff[Sys::Autocannon.idx()] * 0.14), mono(18.0), if blind { AMBER } else { TEXT });
+        let by = r.max.y - bh - 6.0;
         let half = (r.width() - 22.0) / 2.0;
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x, by), Vec2::new(half, 36.0)), "WPN FREE", YELLOW, true, mech.weapons_free).clicked() {
+        if pbutton(ui, Rect::from_min_size(Pos2::new(x, by), Vec2::new(half, bh)), "WPN FREE", YELLOW, !dead, mech.weapons_free).clicked() {
             mech.weapons_free = !mech.weapons_free;
         }
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x + half + 6.0, by), Vec2::new(half, 36.0)), "PT DEFENCE", PURPLE, true, mech.point_defence).clicked() {
+        if pbutton(ui, Rect::from_min_size(Pos2::new(x + half + 6.0, by), Vec2::new(half, bh)), "PT DEFENCE", PURPLE, !dead, mech.point_defence).clicked() {
             mech.point_defence = !mech.point_defence;
         }
     }
@@ -1017,37 +1140,28 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
     // --- EW & crew -----------------------------------------------------------------------
     {
         let r = cards[2];
-        station_card(ui, r, "EW / CREW", campaign.makers[Section::Sensors.idx()]);
+        station_card(ui, r, "EW / CREW", campaign.makers[Section::Sensors.idx()], false);
         let p = ui.painter_at(r);
         let x = r.min.x + 8.0;
-        let mut y = r.min.y + 26.0;
-        text(&p, Pos2::new(x, y), Align2::LEFT_TOP, "ECM CAPACITOR", pix(9.0), DIM);
+        text(&p, Pos2::new(x, r.min.y + 30.0), Align2::LEFT_CENTER, "ECM CAPACITOR", pix(9.0), DIM);
         let ecm_ok = mech.ecm_cd <= 0.0 && st.eff[Sys::Sensors.idx()] >= 5.0;
-        text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, if ecm_ok { "READY" } else if mech.ecm_cd > 0.0 { "RECHARGE" } else { "SENS<5" }, pix(9.0), if ecm_ok { GREEN } else { AMBER });
-        y += 14.0;
-        seg_bar(&p, Rect::from_min_size(Pos2::new(x, y), Vec2::new(r.width() - 16.0, 14.0)), 1.0 - mech.ecm_cd / 28.0, 14, CYAN);
-        y += 20.0;
+        text(&p, Pos2::new(r.max.x - 8.0, r.min.y + 30.0), Align2::RIGHT_CENTER, if ecm_ok { "READY" } else if mech.ecm_cd > 0.0 { "RECHARGE" } else { "SENS<5" }, pix(9.0), if ecm_ok { GREEN } else { AMBER });
+        seg_bar(&p, Rect::from_min_size(Pos2::new(x, r.min.y + 38.0), Vec2::new(r.width() - 16.0, 12.0)), 1.0 - mech.ecm_cd / 28.0, 14, CYAN);
         let in_flight = scene.drones.len();
         let on_hull = scene.boarders.len();
-        for (k, v, c) in [
-            ("DRONES INBOUND", format!("{in_flight}"), if in_flight > 0 { PURPLE } else { TEXT }),
-            ("BOARDERS ON HULL", format!("{on_hull}"), if on_hull > 0 { PURPLE } else { TEXT }),
-            ("PARASITIC DRAW", format!("-{:.0}u", st.parasitic), if st.parasitic > 0.0 { PURPLE } else { TEXT }),
-        ] {
-            text(&p, Pos2::new(x, y), Align2::LEFT_TOP, k, mono(18.0), DIM);
-            text(&p, Pos2::new(r.max.x - 8.0, y), Align2::RIGHT_TOP, v, mono(18.0), c);
-            y += 17.0;
-        }
-        let by = r.max.y - 44.0;
+        let line = format!("{in_flight} DRONES IN  ·  {on_hull} ON HULL  ·  -{:.0}u", st.parasitic);
+        text(&p, Pos2::new(x, r.min.y + 60.0), Align2::LEFT_CENTER, line, mono(18.0), if in_flight + on_hull > 0 { PURPLE } else { TEXT });
+        let by = r.max.y - bh - 6.0;
         let half = (r.width() - 22.0) / 2.0;
-        if pbutton(ui, Rect::from_min_size(Pos2::new(x, by), Vec2::new(half, 36.0)), "ECM [E]", CYAN, ecm_ok && seated, ecm_ok).clicked() {
+        if pbutton(ui, Rect::from_min_size(Pos2::new(x, by), Vec2::new(half, bh)), "ECM [E]", CYAN, ecm_ok && seated, ecm_ok).clicked() {
             cmds.ecm = true;
         }
-        // Leave the chair: go to the worst boarded section (or the most damaged one).
+        // Leave the chair: boarders first, then the sensor head if a camera is down, then the worst section.
         let dest = scene
             .boarders
             .first()
             .map(|b| b.section)
+            .or_else(|| (mech.cameras_up() < CAMERAS).then_some(Section::Sensors))
             .or_else(|| {
                 Section::ALL
                     .iter()
@@ -1057,7 +1171,7 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
             })
             .unwrap_or(Section::Reactor);
         let lbl = if seated { "LEAVE CHAIR" } else { "RETURN" };
-        let br = Rect::from_min_size(Pos2::new(x + half + 6.0, by), Vec2::new(half, 36.0));
+        let br = Rect::from_min_size(Pos2::new(x + half + 6.0, by), Vec2::new(half, bh));
         let can_return = matches!(mech.pilot, Pilot::Working { .. });
         if pbutton(ui, br, lbl, if seated { PURPLE } else { GREEN }, seated || can_return, on_hull > 0 && seated).clicked() {
             if seated {
@@ -1069,9 +1183,9 @@ fn weapons_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotComma
     }
 }
 
-fn station_card(ui: &Ui, r: Rect, name: &str, maker: Maker) {
+fn station_card(ui: &Ui, r: Rect, name: &str, maker: Maker, dead: bool) {
     let p = ui.painter();
-    let accent = rgb(maker.accent());
+    let accent = if dead { RED.gamma_multiply(0.6) } else { rgb(maker.accent()) };
     p.rect_filled(r, 0.0, PANEL_DARK);
     p.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, EDGE_HI), StrokeKind::Inside);
     p.rect_filled(Rect::from_min_size(r.min, Vec2::new(r.width(), 20.0)), 0.0, accent.gamma_multiply(0.18));
@@ -1274,7 +1388,7 @@ fn power_panel(ui: &mut Ui, rect: Rect, mech: &mut Mech, cmds: &mut PilotCommand
         pp.rect_filled(big, 0.0, Color32::from_black_alpha(220));
         pp.rect_stroke(big, CornerRadius::ZERO, Stroke::new(3.0, RED), StrokeKind::Inside);
         text(pp, big.center() - Vec2::new(0.0, 14.0), Align2::CENTER_CENTER, "REACTOR OVERLOAD", pix(16.0), RED);
-        text(pp, big.center() + Vec2::new(0.0, 16.0), Align2::CENTER_CENTER, format!("CONTAINMENT FAILURE IN {:.1}s", t.max(0.0)), mono(26.0), if (scene.t * 4.0).fract() < 0.5 { Color32::WHITE } else { RED });
+        text(pp, big.center() + Vec2::new(0.0, 16.0), Align2::CENTER_CENTER, format!("CONTAINMENT FAILURE IN {:.1}s", t.max(0.0)), mono(22.0), if (scene.t * 4.0).fract() < 0.5 { Color32::WHITE } else { RED });
     }
 }
 
@@ -1567,7 +1681,7 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
             ui.add_space(6.0);
         }
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("CLICK radar contacts to target · SPACE fire railgun · V vent · X scram · E ECM · TAB cycle targets · P pause").size(18.0).color(DIM));
+        ui.label(egui::RichText::new("TAB turn camera right, SHIFT+TAB left · C camera wall · T / click target · SPACE fire · V vent · X scram · E ECM · P pause").size(18.0).color(DIM));
         let br = Rect::from_min_size(Pos2::new(r.center().x - 140.0, r.max.y - 44.0), Vec2::new(280.0, 44.0));
         if pbutton(&mut ui, br, "BEGIN OPERATION", AMBER, true, true).clicked() {
             mission.briefing = false;
@@ -1618,8 +1732,10 @@ fn overlays(ctx: &egui::Context, art: &Art, mech: &Mech, mission: &mut Mission, 
         text(&p, Pos2::new(r.center().x, r.min.y + 4.0), Align2::CENTER_TOP, "PAUSED", pix(24.0), AMBER);
         let mut y = r.min.y + 52.0;
         for (k, v) in [
+            ("TAB", "next camera clockwise (SHIFT+TAB back)"),
+            ("C", "camera wall: all four feeds"),
+            ("T / click", "select target"),
             ("SPACE", "fire railgun"),
-            ("TAB / click", "select target"),
             ("1-7, ↑ ↓", "select a bus, ±5 power (shift ±1)"),
             ("V  X  E", "vent · scram · ECM burst"),
             ("click hull", "send repair drones there"),

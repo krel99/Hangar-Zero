@@ -870,6 +870,29 @@ const ICONS: &[&[&str]] = &[
         "....................",
         "....................",
     ],
+    // 9 CCTV cluster: two tram cameras on a bracket with a status lamp
+    &[
+        "....................",
+        ".......kkkkk........",
+        "......kmmmmmk.......",
+        ".kkkkkkmdddmmkkkkk..",
+        "kllllkmdkkkdmklllllk",
+        "kddddkmdkcCkdmkddddk",
+        "kkkkkkmdkkkdmkkkkkkk",
+        "......kmdddmmk......",
+        ".......kkkkk........",
+        "........kmk.........",
+        ".....kkkkmkkkk......",
+        "....kmmmmmmmmmk.....",
+        "...kmdddddddddmk....",
+        "...kmdkkkkkkkdmk....",
+        "...kmdkcCCCckdmk....",
+        "...kmdkCCwCCkdmk....",
+        "...kmdkcCCCckdmk....",
+        "...kmdkkkkkkkdmk....",
+        "...kkmmmgmmmmmkk....",
+        "....kkkkkkkkkkk.....",
+    ],
 ];
 
 // --------------------------------------------------------------------------------------
@@ -1157,7 +1180,7 @@ fn bayer(x: i32, y: i32) -> f32 {
 }
 
 pub const PANO_W: usize = 1280;
-pub const PANO_H: usize = 150;
+pub const PANO_H: usize = 176;
 pub const HORIZON: i32 = 104;
 
 /// Far layer of the 360° panorama: sky, moon, mountains, distant towers and smoke.

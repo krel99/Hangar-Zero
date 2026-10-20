@@ -180,6 +180,24 @@ pub fn crawl_time(s: Section) -> f32 {
     2.0 + 0.9 * (s.deck() as f32 - Section::Cockpit.deck() as f32).abs()
 }
 
+/// Four fixed hull cameras, one per quadrant.
+pub const CAMERAS: usize = 4;
+pub const CAMERA_HP: f32 = 60.0;
+/// Below this a camera has no usable picture.
+pub const CAMERA_MIN: f32 = 12.0;
+pub const CAMERA_FOV: f32 = PI / 2.0;
+pub const CAMERA_NAMES: [&str; CAMERAS] = ["FWD", "RIGHT", "AFT", "LEFT"];
+
+/// Bearing a camera points at.
+pub fn camera_bearing(cam: usize) -> f32 {
+    cam as f32 * CAMERA_FOV
+}
+
+/// Which camera's quadrant a bearing falls in.
+pub fn camera_for(angle: f32) -> usize {
+    (((angle + CAMERA_FOV / 2.0).rem_euclid(TAU)) / CAMERA_FOV) as usize % CAMERAS
+}
+
 pub const OVERDRIVE: f32 = 1.3;
 /// Heat per second for every unit drawn past the reactor's rated output.
 pub const OVERDRIVE_HEAT: f32 = 0.25;
@@ -222,6 +240,10 @@ pub struct Mech {
     pub hit_flash: f32,
     pub shake: f32,
     pub kills: u32,
+    /// Hull camera health; a dead camera leaves its quadrant radar-only.
+    pub cameras: [f32; CAMERAS],
+    pub active_cam: usize,
+    pub quad_view: bool,
     /// Snapshot of the derived numbers for the UI.
     pub stats: Derived,
 }
@@ -283,6 +305,9 @@ impl Mech {
             hit_flash: 0.0,
             shake: 0.0,
             kills: 0,
+            cameras: campaign.cameras,
+            active_cam: 0,
+            quad_view: false,
             stats: Derived::default(),
         }
         .with_stats(&campaign.mods)
@@ -304,6 +329,19 @@ impl Mech {
         } else {
             0.3 + 0.7 * self.frac(s)
         }
+    }
+
+    pub fn camera_ok(&self, cam: usize) -> bool {
+        self.cameras[cam] >= CAMERA_MIN && self.hp[Section::Sensors.idx()] > 0.0
+    }
+
+    /// True when a working camera is looking at this bearing.
+    pub fn covers(&self, angle: f32) -> bool {
+        self.camera_ok(camera_for(angle))
+    }
+
+    pub fn cameras_up(&self) -> usize {
+        (0..CAMERAS).filter(|c| self.camera_ok(*c)).count()
     }
 
     pub fn uplink(&self) -> f32 {
@@ -368,6 +406,20 @@ pub struct Enemy {
     pub drones: u32,
     pub hit_flash: f32,
     pub reveal: f32,
+    /// Where the radar thinks it is (exact when a camera covers it).
+    pub est_angle: f32,
+    pub est_dist: f32,
+    /// Bearing error of the estimate in radians; 0 when camera-covered.
+    pub err: f32,
+    pub covered: bool,
+    pub last_sweep: f32,
+}
+
+impl Enemy {
+    /// Hit-chance multiplier for a shot aimed at the radar estimate.
+    pub fn aim_factor(&self) -> f32 {
+        if self.covered { 1.0 } else { (1.0 - self.err.to_degrees() / 12.0).clamp(0.25, 1.0) }
+    }
 }
 
 /// Boarding drone in flight.
@@ -537,6 +589,7 @@ impl Plugin for SimPlugin {
                     tick_mission,
                     spawn_waves,
                     power_and_heat,
+                    sensor_fusion,
                     pilot_actions,
                     weapons,
                     enemy_ai,
@@ -608,6 +661,11 @@ pub fn spawn_enemy(commands: &mut Commands, rng: &mut Rng, mission: &mut Mission
         drones: 4,
         hit_flash: 0.0,
         reveal: 0.0,
+        est_angle: angle,
+        est_dist: dist,
+        err: 0.0,
+        covered: false,
+        last_sweep: -10.0,
     });
 }
 
@@ -894,6 +952,16 @@ fn pilot_actions(
                     } else {
                         mech.hp[i] = (mech.hp[i] + 5.0 * dt).min(mech.max_hp[i]);
                     }
+                    // Mast cameras can only be fixed by hand: worst one first.
+                    if at == Section::Sensors
+                        && let Some(cam) = (0..CAMERAS).filter(|c| mech.cameras[*c] < CAMERA_HP).min_by(|a, b| mech.cameras[*a].total_cmp(&mech.cameras[*b]))
+                    {
+                        let was_dead = mech.cameras[cam] < CAMERA_MIN;
+                        mech.cameras[cam] = (mech.cameras[cam] + 4.0 * dt).min(CAMERA_HP);
+                        if was_dead && mech.cameras[cam] >= CAMERA_MIN {
+                            radio.say(Voice::Pilot, format!("{} camera's back. Picture's rough, but it's a picture.", CAMERA_NAMES[cam]));
+                        }
+                    }
                     Pilot::Working { at, t }
                 }
             }
@@ -948,7 +1016,9 @@ fn weapons(
             if e.kind == EnemyKind::Scout {
                 p -= 0.15;
             }
-            fx.add(FxKind::Rail, e.angle, e.dist, 0.45);
+            p *= e.aim_factor();
+            // The shot goes where the radar says the target is.
+            fx.add(FxKind::Rail, e.est_angle, e.est_dist, 0.45);
             if rng.chance(p) {
                 e.hp -= 75.0 * m.rail_damage_mult;
                 e.hit_flash = 0.4;
@@ -1002,11 +1072,12 @@ fn weapons(
             if let Some(te) = chosen {
                 let (_, mut e) = enemies.get_mut(te).unwrap();
                 let falloff = 1.0 - (e.dist / AC_RANGE) * 0.5;
-                e.hp -= st.ac_dps * falloff * dt;
+                let blind = if e.covered { 1.0 } else { 0.5 };
+                e.hp -= st.ac_dps * falloff * blind * dt;
                 e.hit_flash = e.hit_flash.max(0.08);
                 mech.ac_firing = true;
                 if mech.ac_burst_t > 0.12 {
-                    fx.add(FxKind::Tracer, e.angle + rng.range(-0.02, 0.02), e.dist, 0.15);
+                    fx.add(FxKind::Tracer, e.est_angle + rng.range(-0.02, 0.02), e.est_dist, 0.15);
                     mech.ac_burst_t = 0.0;
                 }
             }
@@ -1105,7 +1176,8 @@ fn enemy_ai(
                                 Section::Coolant,
                             ];
                             let s = TARGETS[rng.index(TARGETS.len())];
-                            hit_mech(&mut mech, &mut mission, s, rng.range(5.0, 8.0));
+                            let from = e.angle;
+                            hit_mech(&mut mech, &mut mission, s, rng.range(5.0, 8.0), Some(from));
                         }
                     }
                 }
@@ -1128,7 +1200,9 @@ fn enemy_ai(
                 EnemyState::Engaged => {
                     if e.timer <= 0.0 {
                         e.timer = rng.range(8.0, 10.0);
-                        e.reveal = 3.0;
+                        if mech.covers(e.angle) {
+                            e.reveal = 3.0;
+                        }
                         fx.add(FxKind::Muzzle, e.angle, e.dist, 0.4);
                         const TARGETS: [(Section, u32); 7] = [
                             (Section::Reactor, 3),
@@ -1173,16 +1247,61 @@ fn enemy_ai(
     }
 }
 
-fn hit_mech(mech: &mut Mech, mission: &mut Mission, s: Section, dmg: f32) {
+/// Returns the camera that died, if the hit killed one.
+fn hit_mech(mech: &mut Mech, mission: &mut Mission, s: Section, dmg: f32, from: Option<f32>) -> Option<usize> {
     let absorbed = dmg.min(mech.shield);
     mech.shield -= absorbed;
     mech.heat += absorbed * 0.35;
     mech.shield_hit_t = 0.0;
     let rest = dmg - absorbed;
+    let mut died = None;
     if rest > 0.0 {
         mech.damage(s, rest);
         mission.damage_taken[s.idx()] += rest;
         mech.hit_flash = 1.0;
+        // Fire that reaches the sensor head also chews the camera facing the shooter.
+        if s == Section::Sensors
+            && let Some(a) = from
+        {
+            let cam = camera_for(a);
+            let was_ok = mech.cameras[cam] >= CAMERA_MIN;
+            mech.cameras[cam] = (mech.cameras[cam] - rest * 1.5).max(0.0);
+            if was_ok && mech.cameras[cam] < CAMERA_MIN {
+                died = Some(cam);
+            }
+        }
+    }
+    died
+}
+
+/// Radar contacts: a camera-covered contact is tracked exactly; anything else is a
+/// blip re-sampled on every sweep pass with an error that sensor power shrinks.
+fn sensor_fusion(mut rng: ResMut<Rng>, mech: Res<Mech>, campaign: Res<Campaign>, mut enemies: Query<&mut Enemy>) {
+    let st = mech.stats;
+    let sens = st.eff[Sys::Sensors.idx()];
+    let head = mech.frac(Section::Sensors);
+    let base_err = (3.0 + 14.0 * (1.0 - (sens / 20.0).min(1.0))) * (1.6 - 0.6 * head) + campaign.mods.radar_err;
+    for mut e in enemies.iter_mut() {
+        let covered = mech.covers(e.angle) && e.dist <= 950.0;
+        if covered {
+            e.covered = true;
+            e.err = 0.0;
+            e.est_angle = e.angle;
+            e.est_dist = e.dist;
+            continue;
+        }
+        let was_covered = e.covered;
+        e.covered = false;
+        // Did the sweep cross this contact since the last sample?
+        let since = (mech.sweep - e.angle).rem_euclid(TAU);
+        let passed = since < 0.12 && mech.sweep - e.last_sweep > 1.0 || was_covered;
+        if passed || e.last_sweep < -5.0 {
+            e.last_sweep = mech.sweep;
+            let err = base_err.to_radians();
+            e.err = err;
+            e.est_angle = (e.angle + rng.range(-err, err)).rem_euclid(TAU);
+            e.est_dist = (e.dist * (1.0 + rng.range(-0.12, 0.12) * (base_err / 17.0))).max(20.0);
+        }
     }
 }
 
@@ -1234,9 +1353,12 @@ fn shells(
             let p = 0.85 - 0.55 * mech.stats.evasion;
             if rng.chance(p) {
                 let dmg = if s.target == Section::Uplink { 8.0 } else { rng.range(16.0, 24.0) };
-                hit_mech(&mut mech, &mut mission, s.target, dmg);
+                let d1 = hit_mech(&mut mech, &mut mission, s.target, dmg, Some(s.angle));
                 let splash = Section::ALL[rng.index(9)];
-                hit_mech(&mut mech, &mut mission, splash, 5.0);
+                let d2 = hit_mech(&mut mech, &mut mission, splash, 5.0, Some(s.angle));
+                if let Some(cam) = d1.or(d2) {
+                    radio.say(Voice::System, format!("CAMERA {} LOST. QUADRANT IS RADAR-ONLY.", CAMERA_NAMES[cam]));
+                }
                 mech.shake = 1.4;
                 fx.add(FxKind::ShellImpact, s.angle, 30.0, 0.8);
                 if s.target == Section::Uplink {
@@ -1300,50 +1422,6 @@ mod tests {
 
     use super::*;
 
-    /// A crude pilot: keeps repair on the uplink, snipes what it can see, vents
-    /// when hot and pushes sensors up once artillery starts landing.
-    fn autopilot(
-        mut mech: ResMut<Mech>,
-        mut cmds: ResMut<PilotCommands>,
-        enemies: Query<(Entity, &Enemy)>,
-        boarders: Query<&Boarder>,
-    ) {
-        let range = mech.stats.radar_range;
-        let pick = enemies
-            .iter()
-            .filter(|(_, e)| e.dist <= range)
-            .max_by_key(|(_, e)| match e.kind {
-                EnemyKind::Artillery => 3,
-                EnemyKind::Carrier => 2,
-                EnemyKind::Scout => 1,
-            })
-            .map(|(e, _)| e);
-        mech.target = pick;
-        mech.alloc = if mech.heat > 60.0 { [5.0, 20.0, 10.0, 10.0, 10.0, 15.0, 30.0] } else { [5.0, 20.0, 20.0, 10.0, 10.0, 20.0, 15.0] };
-        if mech.heat < 70.0 && mech.rail_charge >= 1.0 {
-            cmds.fire_rail = true;
-        }
-        if mech.heat > 88.0 {
-            cmds.vent = true;
-        }
-        if mech.overload.is_some() {
-            cmds.scram = true;
-        }
-        let worst = Section::ALL[..9].iter().copied().min_by(|a, b| mech.frac(*a).total_cmp(&mech.frac(*b))).unwrap();
-        mech.repair_target = if mech.frac(worst) < 0.3 { worst } else { Section::Uplink };
-        if let Some(b) = boarders.iter().next()
-            && mech.pilot.in_seat()
-            && boarders.iter().count() >= 3
-        {
-            cmds.crawl_to = Some(b.section);
-        }
-        if let Pilot::Working { at, .. } = mech.pilot
-            && boarders.iter().all(|b| b.section != at)
-        {
-            cmds.return_to_seat = true;
-        }
-    }
-
     fn run(seed: u64, with_pilot: bool) -> (Option<Outcome>, f32, f32, f32) {
         let r = run_full(seed, with_pilot);
         (r.0, r.1, r.2, r.3)
@@ -1362,7 +1440,7 @@ mod tests {
         mission.briefing = false;
         app.insert_resource(mission);
         if with_pilot {
-            app.add_systems(Update, autopilot.before(tick_mission));
+            app.add_systems(Update, crate::autopilot::autopilot.before(tick_mission));
         }
         for i in 0..(20 * 600) {
             app.update();

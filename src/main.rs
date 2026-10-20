@@ -3,6 +3,7 @@
 //! damage control and the radio.
 
 mod art;
+mod autopilot;
 mod campaign;
 mod rng;
 mod shots;
@@ -74,6 +75,10 @@ fn main() {
         .add_systems(EguiPrimaryContextPass, ui::cockpit::cockpit_ui.run_if(in_state(AppState::Cockpit)).run_if(resource_exists::<FontsReady>).after(setup_egui))
         .add_systems(EguiPrimaryContextPass, ui::hangar::hangar_ui.run_if(in_state(AppState::Hangar)).run_if(resource_exists::<FontsReady>).after(setup_egui));
     if let Some(plan) = shot {
+        if plan.is_play() {
+            app.add_systems(Update, autopilot::autopilot.run_if(mission_running))
+                .add_systems(Startup, |mut time: ResMut<Time<Virtual>>| time.set_relative_speed(4.0));
+        }
         app.insert_resource(plan).add_systems(Update, shots::run_shot_plan);
     }
     app.run();
@@ -155,6 +160,7 @@ fn handle_flow(
         FlowRequest::ToHangar => {
             if let (Some(mission), Some(mech)) = (mission, mech) {
                 campaign.apply_scars(&mission, mech.kills, mech.heat_peak);
+                campaign.cameras = mech.cameras;
             }
             campaign.mission += 1;
             campaign.roll_salvage(&mut rng);
