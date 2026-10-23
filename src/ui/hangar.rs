@@ -10,7 +10,8 @@ use bevy_egui::{
 use super::cockpit::root_ui;
 use super::*;
 use crate::art;
-use crate::campaign::{Campaign, PartId, part};
+use crate::campaign::{Campaign, MATRIX_COST, PartId, part};
+use crate::sim::Sys;
 use crate::rng::hash2;
 use crate::sim::Section;
 use crate::{Flow, FlowRequest};
@@ -51,13 +52,44 @@ pub fn hangar_ui(
     );
     paint_cradle(&p, mech_rect, cradle_y, r.max.y, s);
     paint_mech(&p, mech_rect, ms, &art.hull, &art.hull_detail, &campaign, t);
-    // Welding sparks
-    for i in 0..10 {
-        let h = hash2(i, (t * 14.0) as i32, 3);
-        if h.is_multiple_of(3) {
-            let x = mech_rect.min.x + (h % mech_rect.width() as u32) as f32;
-            let y = mech_rect.min.y + ((h >> 8) % mech_rect.height() as u32) as f32;
-            p.rect_filled(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s * 0.6)), 0.0, YELLOW);
+    // Rotating hazard beacon on the gantry: an orange cone sweeping the hangar.
+    {
+        let beacon = Pos2::new(r.min.x + 118.0 * s / (s.max(1.0)) * 1.0 + 0.0, bg.min.y + 46.0 * s);
+        let beacon = Pos2::new(bg.min.x + 118.0 * s, beacon.y);
+        let ang = (t * 1.4).rem_euclid(std::f64::consts::TAU) as f32;
+        let dir = Vec2::new(ang.cos(), ang.sin() * 0.35);
+        let tip = beacon + dir * 260.0;
+        let a = ((ang.sin() * 0.5 + 0.5) * 28.0) as u8 + 6;
+        p.add(egui::Shape::convex_polygon(
+            vec![beacon, tip + Vec2::new(-dir.y, dir.x) * 40.0, tip - Vec2::new(-dir.y, dir.x) * 40.0],
+            Color32::from_rgba_unmultiplied(255, 140, 40, a),
+            Stroke::NONE,
+        ));
+        p.rect_filled(Rect::from_center_size(beacon, Vec2::splat(s * 1.5)), 0.0, Color32::from_rgb(255, 160, 60));
+    }
+    // Dust motes drifting through the skylight shaft.
+    for i in 0..60 {
+        let h = hash2(i, 2, 53);
+        let fx = ((h % 100) as f32 / 100.0 - 0.5) * 2.0;
+        let y = bg.min.y + (((h >> 8) % 1000) as f32 / 1000.0 * 180.0 + t as f32 * 2.5 * (1.0 + (h % 3) as f32 * 0.3)) % (170.0 * s);
+        let x = bg.min.x + (200.0 + (y / s - 14.0) * 0.32) * s + fx * (36.0 + y / s * 0.2) * s + ((t * 0.8 + i as f64).sin() as f32) * 3.0 * s;
+        p.rect_filled(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s * 0.5)), 0.0, Color32::from_rgba_unmultiplied(230, 225, 210, 70));
+    }
+    // Chief Oda, welding at the left foot.
+    {
+        let k = 3.0;
+        let foot = Pos2::new(mech_rect.min.x - 14.0 * k, cradle_y - 16.0 * k);
+        art.sprites.pilot.paint(&p, foot, k, 0.0, Some(Color32::from_rgb(170, 170, 190)), false);
+        let torch = foot + Vec2::new(9.0 * k, 8.0 * k);
+        if ((t * 23.0) as i32) % 3 != 0 {
+            p.rect_filled(Rect::from_center_size(torch, Vec2::splat(k * 1.5)), 0.0, Color32::WHITE);
+            p.rect_filled(Rect::from_center_size(torch, Vec2::splat(k * 5.0)), 0.0, Color32::from_rgba_unmultiplied(150, 200, 255, 50));
+            for i in 0..8 {
+                let h = hash2(i, (t * 20.0) as i32, 3);
+                let dx = ((h % 100) as f32 / 100.0 - 0.3) * 14.0 * k;
+                let dy = ((h >> 8) % 100) as f32 / 100.0 * 10.0 * k;
+                p.rect_filled(Rect::from_min_size(torch + Vec2::new(dx, dy), Vec2::splat(k * 0.5)), 0.0, if h % 2 == 0 { YELLOW } else { Color32::from_rgb(255, 170, 70) });
+            }
         }
     }
     scanlines(&p, r, 18);
@@ -127,16 +159,41 @@ pub fn hangar_ui(
         text(&p, Pos2::new(inner.min.x, y), Align2::LEFT_TOP, "Nothing yet. Every bolt is factory.", mono(19.0), DIM);
         y += 18.0;
     }
-    for id in campaign.installed.iter().rev().take(7) {
+    for id in campaign.installed.iter().rev().take(4) {
         let info = part(*id);
         text(&p, Pos2::new(inner.min.x, y), Align2::LEFT_TOP, format!("· {}", info.name), mono(19.0), rgb(info.maker.accent()));
         y += 18.0;
     }
-    y += 8.0;
-    let lore = "Each graft rewires a station in the cockpit: new faceplates, new readouts. Keep her original, or turn her into whatever survives.";
-    child(&mut ui, Rect::from_min_max(Pos2::new(inner.min.x, y), inner.max), |ui| {
-        ui.add(egui::Label::new(egui::RichText::new(lore).size(19.0).color(DIM)).wrap());
-    });
+    y += 10.0;
+
+    // --- Energy matrix: what is wired to the reactor for the next op ------------------------
+    let output = campaign.mods.reactor_output;
+    let draw = campaign.matrix_draw();
+    text(&p, Pos2::new(inner.min.x, y), Align2::LEFT_TOP, "ENERGY MATRIX", pix(10.0), AMBER);
+    text(&p, Pos2::new(inner.max.x, y - 4.0), Align2::RIGHT_TOP, format!("{draw:.0} / {output:.0}u"), mono(24.0), if draw > output { RED } else { GREEN });
+    y += 22.0;
+    seg_bar(&p, Rect::from_min_size(Pos2::new(inner.min.x, y), Vec2::new(inner.width(), 12.0)), draw / output, 20, if draw > output { RED } else { GREEN });
+    y += 20.0;
+    let mut toggle: Option<usize> = None;
+    for (i, sys) in Sys::ALL.iter().enumerate() {
+        let on = campaign.matrix[i];
+        let cost = MATRIX_COST[i];
+        let row = Rect::from_min_size(Pos2::new(inner.min.x, y), Vec2::new(inner.width(), 22.0));
+        let can_on = on || draw + cost <= output;
+        let col = crate::ui::cockpit::sys_color(*sys);
+        let btn = Rect::from_min_size(Pos2::new(row.min.x, row.min.y + 1.0), Vec2::new(70.0, 20.0));
+        if pbutton(&mut ui, btn, if on { "WIRED" } else { "OFF" }, col, can_on, on).clicked() {
+            toggle = Some(i);
+        }
+        text(&p, Pos2::new(row.min.x + 80.0, row.center().y), Align2::LEFT_CENTER, sys.name(), pix(9.0), if on { col } else { DIM });
+        text(&p, Pos2::new(row.min.x + 140.0, row.center().y), Align2::LEFT_CENTER, format!("{cost:.0}u"), mono(18.0), if on { TEXT } else { DIM });
+        text(&p, Pos2::new(row.max.x, row.center().y), Align2::RIGHT_CENTER, sys.long_name(), mono(16.0), DIM);
+        y += 24.0;
+    }
+    if let Some(i) = toggle {
+        campaign.matrix[i] = !campaign.matrix[i];
+    }
+    text(&p, Pos2::new(inner.min.x, y + 4.0), Align2::LEFT_TOP, "The reactor can't feed everything. Choose before you walk.", mono(17.0), DIM);
 
     // --- Bottom: salvage choices --------------------------------------------------------------
     let cards_r = Rect::from_min_max(Pos2::new(r.min.x + 20.0, r.max.y - 300.0), Pos2::new(r.max.x - 20.0, r.max.y - 16.0));
@@ -159,6 +216,15 @@ pub fn hangar_ui(
         // Icon plinth
         let ir = Rect::from_min_size(cr.min + Vec2::new(10.0, 32.0), Vec2::splat(88.0));
         p.rect_filled(ir, 0.0, PANEL_DARK);
+        // Spotlit pedestal under the part.
+        p.add(egui::Shape::convex_polygon(
+            vec![ir.center_top() + Vec2::new(-6.0, 0.0), ir.center_top() + Vec2::new(6.0, 0.0), ir.max - Vec2::new(8.0, 10.0), Pos2::new(ir.min.x + 8.0, ir.max.y - 10.0)],
+            accent.gamma_multiply(0.12),
+            Stroke::NONE,
+        ));
+        p.rect_filled(Rect::from_min_size(Pos2::new(ir.min.x + 14.0, ir.max.y - 12.0), Vec2::new(ir.width() - 28.0, 4.0)), 0.0, Color32::from_rgb(70, 66, 60));
+        p.rect_filled(Rect::from_min_size(Pos2::new(ir.min.x + 10.0, ir.max.y - 8.0), Vec2::new(ir.width() - 20.0, 4.0)), 0.0, Color32::from_rgb(44, 42, 40));
+        p.rect_filled(Rect::from_min_size(Pos2::new(ir.min.x + 14.0, ir.max.y - 12.0), Vec2::new(ir.width() - 28.0, 1.0)), 0.0, Color32::from_rgb(120, 114, 100));
         let bob = ((t * 2.0 + i as f64).sin() * 2.0) as f32;
         art.sprites.icons[info.icon].paint(&p, ir.min + Vec2::new(4.0, 4.0 + bob.round()), 4.0, 0.0, None, false);
         child(&mut ui, Rect::from_min_max(Pos2::new(ir.max.x + 10.0, ir.min.y - 2.0), Pos2::new(cr.max.x - 8.0, ir.max.y + 8.0)), |ui| {

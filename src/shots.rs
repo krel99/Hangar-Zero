@@ -5,6 +5,10 @@
 //! Each scene stages a moment of an encounter (enemy positions, damage, radio
 //! history), lets the real simulation run for a few seconds, then captures the
 //! primary window and exits.
+//!
+//! `HZ_SCENE=play` instead hands the mech to the autopilot at 4x speed and saves a
+//! frame every `HZ_EVERY` mission seconds (`HZ_FRAMES` of them) to `<HZ_SHOT>_NN.png`,
+//! so a whole mission can be reviewed as a strip (`scripts/strip.py` tiles them).
 
 use std::f32::consts::TAU;
 
@@ -22,6 +26,9 @@ pub struct ShotPlan {
     pub scene: String,
     pub path: String,
     pub seed: u64,
+    pub frames: u32,
+    pub every: f32,
+    taken: u32,
     staged_at: Option<f32>,
     shot_at: Option<f32>,
 }
@@ -30,13 +37,21 @@ impl ShotPlan {
     pub fn from_env() -> Option<Self> {
         let scene = std::env::var("HZ_SCENE").ok()?;
         let path = std::env::var("HZ_SHOT").unwrap_or_else(|_| format!("{scene}.png"));
-        Some(Self { scene, path, seed: 1987, staged_at: None, shot_at: None })
+        let frames = std::env::var("HZ_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+        let every = std::env::var("HZ_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(25.0);
+        let seed = std::env::var("HZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1987);
+        Some(Self { scene, path, seed, frames, every, taken: 0, staged_at: None, shot_at: None })
+    }
+
+    pub fn is_play(&self) -> bool {
+        self.scene == "play"
     }
 
     fn settle(&self) -> f32 {
         match self.scene.as_str() {
             "briefing" | "hangar" => 1.5,
             "eva" => 3.0,
+            "quad" => 2.4,
             _ => 2.4,
         }
     }
@@ -58,6 +73,25 @@ pub fn run_shot_plan(
 ) {
     let now = time.elapsed_secs();
     if now < 1.0 {
+        return;
+    }
+    if plan.is_play() {
+        let (Some(mut mission), Some(_)) = (mission, mech) else { return };
+        mission.briefing = false;
+        let done = mission.outcome.is_some();
+        if (mission.time >= plan.taken as f32 * plan.every || done) && plan.taken < plan.frames && plan.shot_at.is_none_or(|t| now - t > 0.5) {
+            let path = format!("{}_{:02}.png", plan.path.trim_end_matches(".png"), plan.taken);
+            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.clone()));
+            info!("capturing {path} at T+{:.0}", mission.time);
+            plan.taken += 1;
+            plan.shot_at = Some(now);
+            if done {
+                plan.taken = plan.frames;
+            }
+        }
+        if plan.taken >= plan.frames && plan.shot_at.is_some_and(|t| now - t > 1.5) {
+            exit.write(AppExit::Success);
+        }
         return;
     }
     if plan.staged_at.is_none() {
@@ -101,19 +135,20 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
     radio.time = 0.0;
     radio.log.clear();
     let script: [(f32, Voice, &str); 12] = [
-        (0.0, Voice::System, "BASTION OS v7.31 — COLD START COMPLETE. 3 OF 9 SUBSYSTEMS REPORT FAULTS."),
-        (2.0, Voice::Control, "Bastion, City Control. Uplink mast is dark. Get it back up and hold the line."),
-        (31.0, Voice::Control, "Bastion, seismic thump bearing 302. Something heavy is setting up out there."),
+        (0.0, Voice::System, "COLD START. 4 FAULTS."),
+        (2.0, Voice::Control, "Uplink's dark. Get it up, hold the line."),
+        (31.0, Voice::Control, "Heavy contact bearing 302. Crab."),
         (47.0, Voice::Pilot, "Scout down."),
-        (56.0, Voice::Control, "Hive signature bearing 118. Carrier class. Don't let the ticks latch on."),
-        (66.0, Voice::Enemy, "[INTERCEPT] CRB-03: braced. Ranging on the walker."),
-        (74.0, Voice::Chief, "Boarding drones! Point defence on, or they'll chew through the hull."),
-        (88.0, Voice::System, "HULL CONTACT: boarding drone latched onto COOLANT LINES."),
-        (88.5, Voice::System, "PARASITIC DRAW DETECTED: -6 UNITS"),
-        (102.0, Voice::Control, "Uplink took a hit! Restore progress lost."),
-        (119.0, Voice::Chief, "Core's running hot. Ease off the rail or give me more cooling."),
-        (128.0, Voice::Pilot, "Rail's charged. Crab first, then the jackals."),
+        (56.0, Voice::Control, "Carrier bearing 118. Watch for ticks."),
+        (66.0, Voice::Enemy, "CRB-03 braced. Ranging."),
+        (74.0, Voice::Chief, "Boarders. Point defence on."),
+        (88.0, Voice::System, "BOARDER ON COOLANT LINES."),
+        (88.5, Voice::System, "PARASITIC DRAW -6u"),
+        (102.0, Voice::Control, "Uplink hit. Progress lost."),
+        (119.0, Voice::Chief, "Core's hot. Ease off."),
+        (128.0, Voice::Pilot, "Rail's up. Crab first."),
     ];
+
     for (t, v, s) in script {
         radio.log.push(RadioMsg { time: t, voice: v, text: s.into() });
     }
@@ -135,6 +170,11 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
         drones: 2,
         hit_flash: 0.0,
         reveal: 0.0,
+        est_angle: a,
+        est_dist: d,
+        err: 0.0,
+        covered: false,
+        last_sweep: -10.0,
     };
 
     match scene {
@@ -158,8 +198,8 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
             mech.repair_target = Section::Coolant;
             mech.rail_charge = 0.55;
             mech.heat_peak = 112.0;
-            radio.log.push(RadioMsg { time: 129.0, voice: Voice::System, text: "!! REACTOR OVERLOAD !! CONTAINMENT FAILURE IMMINENT.".into() });
-            radio.log.push(RadioMsg { time: 129.2, voice: Voice::Chief, text: "Vent it, SCRAM it, or get out of there!".into() });
+            radio.log.push(RadioMsg { time: 129.0, voice: Voice::System, text: "REACTOR OVERLOAD. 12s.".into() });
+            radio.log.push(RadioMsg { time: 129.2, voice: Voice::Chief, text: "Vent it, scram it, or get out!".into() });
         }
         "eva" => {
             commands.spawn(mk(EnemyKind::Carrier, 4, deg(300.0), 345.0, EnemyState::Engaged, 96.0, 150.0, 1.0));
@@ -175,17 +215,21 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
             mech.hp[Section::Sensors.idx()] = 80.0;
             mech.hp[Section::Uplink.idx()] = 44.0;
             mech.repair_target = Section::Uplink;
-            radio.log.push(RadioMsg { time: 129.0, voice: Voice::Pilot, text: "Leaving the chair. Crawling to the coolant lines.".into() });
+            radio.log.push(RadioMsg { time: 129.0, voice: Voice::Pilot, text: "Going to the coolant lines.".into() });
         }
         _ => {
-            // "combat": the general cockpit view mid-fight.
+            // "combat" / "quad": the general cockpit view mid-fight. The artillery sits in the
+            // dead LEFT quadrant, so it is a radar-only blip; the scouts are on camera.
+            if scene == "quad" {
+                mech.quad_view = true;
+            }
             commands.spawn(mk(EnemyKind::Scout, 5, deg(22.0), 230.0, EnemyState::Engaged, 41.0, 60.0, 1.0));
             commands.spawn(mk(EnemyKind::Scout, 6, deg(62.0), 330.0, EnemyState::Approach, 60.0, 60.0, -1.0));
-            commands.spawn(mk(EnemyKind::Artillery, 3, deg(302.0), 600.0, EnemyState::Engaged, 141.0, 200.0, 1.0));
+            commands.spawn(mk(EnemyKind::Artillery, 3, deg(292.0), 440.0, EnemyState::Engaged, 141.0, 200.0, 1.0));
             commands.spawn(mk(EnemyKind::Carrier, 4, deg(118.0), 345.0, EnemyState::Engaged, 96.0, 150.0, 1.0));
             commands.spawn(Drone { angle: deg(118.0), dist: 150.0, hp: 10.0 });
             commands.spawn(Boarder { section: Section::Coolant, age: 10.0 });
-            commands.spawn(Shell { target: Section::LeftLeg, t: 0.6, flight: 6.0, angle: deg(302.0) });
+            commands.spawn(Shell { target: Section::LeftLeg, t: 0.6, flight: 6.0, angle: deg(292.0) });
             mech.heat = 74.0;
             mech.heat_peak = 88.0;
             mech.hp[Section::LeftLeg.idx()] = 31.0;
@@ -204,9 +248,15 @@ fn stage_combat(scene: &str, commands: &mut Commands, _rng: &mut Rng, mech: &mut
     }
     // Target the first scout so camera + radar show a lock.
     mech.target = None;
-    commands.queue(|world: &mut World| {
+    let want_radar_only = matches!(scene, "combat" | "quad");
+    commands.queue(move |world: &mut World| {
         let mut q = world.query::<(Entity, &Enemy)>();
-        let pick = q.iter(world).find(|(_, e)| e.serial == 5 || (e.serial == 4 && e.kind == EnemyKind::Carrier)).map(|(e, _)| e);
+        // Combat/quad lock the artillery hiding in the blind quadrant (radar-only aim);
+        // the other scenes lock whatever is closest.
+        let pick = q
+            .iter(world)
+            .find(|(_, e)| if want_radar_only { e.serial == 3 } else { e.serial == 5 || (e.serial == 4 && e.kind == EnemyKind::Carrier) })
+            .map(|(e, _)| e);
         if let Some(e) = pick {
             world.resource_mut::<Mech>().target = Some(e);
         }

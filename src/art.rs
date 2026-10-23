@@ -109,6 +109,7 @@ impl Sprite {
 
 pub struct SpriteBank {
     pub scout: Sprite,
+    pub scout_walk: Sprite,
     pub artillery: Sprite,
     pub carrier: Sprite,
     pub drone: Sprite,
@@ -123,14 +124,18 @@ pub struct SpriteBank {
     pub wrench: Sprite,
     /// Interior machinery per section, indexed by `Section::idx()`.
     pub props: Vec<Sprite>,
+    /// Hotbar miniatures: RAIL, A/C, ECM, VENT, SCRAM, EJECT, CREW.
+    pub hotbar: Vec<Sprite>,
     pub arm_rail: Sprite,
     pub arm_ac: Sprite,
+    pub crest: Sprite,
 }
 
 impl SpriteBank {
     pub fn new() -> Self {
         Self {
             scout: Sprite::parse(SCOUT),
+            scout_walk: Sprite::parse(SCOUT_WALK),
             artillery: Sprite::parse(ARTILLERY),
             carrier: Sprite::parse(CARRIER),
             drone: Sprite::parse(DRONE),
@@ -144,8 +149,10 @@ impl SpriteBank {
             icons: ICONS.iter().map(|i| Sprite::parse(i)).collect(),
             wrench: Sprite::parse(WRENCH),
             props: PROPS.iter().map(|i| Sprite::parse(i)).collect(),
+            hotbar: HOTBAR.iter().map(|i| Sprite::parse(i)).collect(),
             arm_rail: Sprite::parse(ARM_RAIL),
             arm_ac: Sprite::parse(ARM_AC),
+            crest: Sprite::parse(CREST),
         }
     }
 }
@@ -177,6 +184,31 @@ const SCOUT: &[&str] = &[
     ".....kddkdk...................kddk..kdk.",
     "....kkkkkkk...................kkkkk.kkkk",
 ];
+
+/// Second walk frame: legs swapped.
+const SCOUT_WALK: &[&str] = &[
+    "........kk..............................",
+    "........kck.............................",
+    "...kkkkkkkk...........kkkk..............",
+    "..kSSSSSSsk..........kddddk.............",
+    ".kSsssssssskkkkkkkkkkkxxddk.............",
+    ".ksskRRrrkssSSSSSSSSSSSSSssk............",
+    ".ksskrrRRkssssssssssssssssssk...........",
+    ".kssskkkkssstttsstttsstttsstk...........",
+    ".kssssssssstttttttttttttttttk...........",
+    "kkkkkkksssstttttttttttttttttek..........",
+    "kmllllkssttttttttttttttttttteek.........",
+    "kkkkkkkkttkkkkkkkkkkkkkkkkeeeek.........",
+    ".........kkkmlkdk......kmlkkkkkdk.......",
+    "...........kmlkdk.......kmlk..kdk.......",
+    "..........kmlkdk.........kmlk..kdk......",
+    ".........kmlkdk...........kmlk..kdk.....",
+    "........kmmkdk.............kmmk..kdk....",
+    ".......kmlkdk...............kmlk..kdk...",
+    "......kddkdk.................kddk..kdk..",
+    ".....kkkkkkk.................kkkkk.kkkk.",
+];
+
 
 /// Mortar Crab: a wide braced carapace with hazard stripes and a mortar tube.
 const ARTILLERY: &[&str] = &[
@@ -445,6 +477,218 @@ const PROPS: &[&[&str]] = &[
         "kmxxmxxmxxmxmk",
         "kmmmmmmmmmmmmk",
         "kkkkkkkkkkkkkk",
+    ],
+];
+
+/// Bastion Works crest: a walking fortress over a bar.
+pub const CREST: &[&str] = &[
+    ".....kk.....",
+    "....kuuk....",
+    "...kuuuuk...",
+    "..kuukkuuk..",
+    "..kuk..kuk..",
+    ".kuuk..kuuk.",
+    ".kuuuuuuuuk.",
+    ".kukkkkkkuk.",
+    ".kuk....kuk.",
+    "kkukk..kkukk",
+    "kuuuuuuuuuuk",
+    "kkkkkkkkkkkk",
+];
+
+// --------------------------------------------------------------------------------------
+// Hotbar miniatures (16x16)
+// --------------------------------------------------------------------------------------
+
+const HOTBAR: &[&[&str]] = &[
+    // RAIL: capacitor block feeding a long rail barrel on its mount
+    &[
+        "........................",
+        "........................",
+        "...kk...................",
+        "..kcck..................",
+        ".kccCckkkkkkkkkkkkkkkkk.",
+        "kccCCCklllllllllllllllhk",
+        "kcCCCCkmmmmmmmmmmmmmmmhk",
+        "kcCCCCkxxxxxxxxxxxxxxxxk",
+        "kccCCCkmmmmmmmmmmmmmmmhk",
+        ".kccCckllllllllllllllhk.",
+        "..kcckkkkkkkkkkkkkkkkkk.",
+        "...kkkmmmk..............",
+        "....kdhdk...............",
+        "....kdmdk...............",
+        "....kdmdk...............",
+        "...kkdddkk..............",
+        "..kddddddddk............",
+        "..kkkkkkkkkk............",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+    ],
+    // A/C: rotary autocannon, belt feed on top, pintle below
+    &[
+        "........................",
+        "........................",
+        ".....kkkkk..............",
+        "....kyyyyyk.............",
+        "...kkkkkkkkkkkkkkkkkkk..",
+        "..kmmmmmmmmlllllllllllk.",
+        ".kdmkkkkkkkmmmmmmmmmmmhk",
+        ".kdmkxxxxxkmmmmmmmmmmmhk",
+        ".kdmkkkkkkkmmmmmmmmmmmhk",
+        ".kdmkxxxxxkmmmmmmmmmmmhk",
+        "..kmmmmmmmmlllllllllllk.",
+        "...kkkkkkkkkkkkkkkkkkk..",
+        "....kykykykykyk.........",
+        "....kkkkkkkkkkk.........",
+        "......kdhdk.............",
+        "......kdmdk.............",
+        ".....kkdddkk............",
+        "....kddddddddk..........",
+        "....kkkkkkkkkk..........",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+    ],
+    // ECM: the dish, mid-burst
+    &[
+        "...........c............",
+        ".....c.....c.....c......",
+        "......c....c....c.......",
+        ".......c...c...c........",
+        "........kkkkkkkkk.......",
+        ".....kkkSSSSSsssskkk....",
+        "...kkSSSSSssssssssssk...",
+        "..kSSSSsssssssssssssk...",
+        ".kSSSsttsssssssssssssk..",
+        ".kSSstttsssssssssssssk..",
+        ".kSssstttssssssssssssk..",
+        "..kssssttsssssssssssk...",
+        "...kksssttsssssssskk....",
+        ".....kkkssssssskkk......",
+        "........kkkkkkk.........",
+        "..........kmk...........",
+        "..........kmk...........",
+        "..........kmk...........",
+        ".........kmmmk..........",
+        ".......kkmmmmmkk........",
+        "......kkkkkkkkkkk.......",
+        "........................",
+        "........................",
+        "........................",
+    ],
+    // VENT: coolant radiator venting steam
+    &[
+        "...w....w.....w....w....",
+        "..w....w.....w....w.....",
+        "...w....w.....w....w....",
+        "..w....w.....w....w.....",
+        "........................",
+        "kkkkkkkkkkkkkkkkkkkkkkkk",
+        "kclclclclclclclclclclclk",
+        "kcIcIcIcIcIcIcIcIcIcIcIk",
+        "kclclclclclclclclclclclk",
+        "kcIcIcIcIcIcIcIcIcIcIcIk",
+        "kclclclclclclclclclclclk",
+        "kcIcIcIcIcIcIcIcIcIcIcIk",
+        "kclclclclclclclclclclclk",
+        "kkkkkkkkkkkkkkkkkkkkkkkk",
+        ".....kmk........kmk.....",
+        ".....kck........kck.....",
+        ".....kck........kck.....",
+        "....kkckk......kkckk....",
+        "....kcIck......kcIck....",
+        "....kcIck......kcIck....",
+        "....kkkkk......kkkkk....",
+        "........................",
+        "........................",
+        "........................",
+    ],
+    // SCRAM: control rods dropping into a glowing core
+    &[
+        "...kk....kk....kk.......",
+        "...kl....kl....kl.......",
+        "...kl....kl....kl.......",
+        "...kl....kl....kl.......",
+        ".kkkkkkkkkkkkkkkkkkkkk..",
+        "kmllllllllllllllllllllmk",
+        "kmkkkkkkkkkkkkkkkkkkkkmk",
+        "kmkoooyyyyyyyyyyyyooookk",
+        "kmkooyYYYYYYYYYYYYyookmk",
+        "kmkooyYYYYYYYYYYYYyookmk",
+        "kmkooyYYYYYYYYYYYYyookmk",
+        "kmkoooyyyyyyyyyyyyooookk",
+        "kmkkkkkkkkkkkkkkkkkkkkmk",
+        "kmmmmmmmmmmmmmmmmmmmmmmk",
+        ".kkkkkkkkkkkkkkkkkkkkk..",
+        ".....krrrrrrrrrrrrk.....",
+        ".....kkkkkkkkkkkkkk.....",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+    ],
+    // EJECT: the chair, canopy blown
+    &[
+        "........kkkkkkkk........",
+        ".......kyyyyyyyyk.......",
+        "......kyYYYYYYYYyk......",
+        "......kykkkkkkkkyk......",
+        "......kkkkkkkkkkkk......",
+        "....kuuuuuuuuuuuuuuk....",
+        "....kuooooooooooooouk...",
+        "....kuocccccccccccouk...",
+        "....kuocCCCCCCCCCcouk...",
+        "....kuooooooooooooouk...",
+        "....kuuuuuuuuuuuuuuk....",
+        ".....kkkkkkkkkkkkkk.....",
+        "........koooook.........",
+        ".......kooooooook.......",
+        "......kooooooooook......",
+        ".....kyooooooooooyk.....",
+        "....kyyooooooooooyyk....",
+        "...kyyyyoooooooooyyyyk..",
+        "..kkkkkkkkkkkkkkkkkkkkk.",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+    ],
+    // CREW: the pilot, out of the chair, wrench in hand
+    &[
+        ".........kkkk...........",
+        "........koooook.........",
+        ".......kooooooook.......",
+        ".......kokcccckok.......",
+        ".......kokcCcckok.......",
+        ".......koooooook........",
+        "........knnnnk....lhl...",
+        ".......kttttttk..l.h.l..",
+        "......kttotttttk..lhl...",
+        ".....knttttotttnk..h....",
+        ".....kntttotttnk...h....",
+        ".....kkttottttkk...h....",
+        ".......kttttttk....h....",
+        ".......kttottttk...l....",
+        ".......kedkkdek.........",
+        ".......kdk..kdk.........",
+        ".......kdk..kdk.........",
+        ".......kdk..kdk.........",
+        "......kkkk..kkkk........",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
+        "........................",
     ],
 ];
 
@@ -870,6 +1114,29 @@ const ICONS: &[&[&str]] = &[
         "....................",
         "....................",
     ],
+    // 9 CCTV cluster: two tram cameras on a bracket with a status lamp
+    &[
+        "....................",
+        ".......kkkkk........",
+        "......kmmmmmk.......",
+        ".kkkkkkmdddmmkkkkk..",
+        "kllllkmdkkkdmklllllk",
+        "kddddkmdkcCkdmkddddk",
+        "kkkkkkmdkkkdmkkkkkkk",
+        "......kmdddmmk......",
+        ".......kkkkk........",
+        "........kmk.........",
+        ".....kkkkmkkkk......",
+        "....kmmmmmmmmmk.....",
+        "...kmdddddddddmk....",
+        "...kmdkkkkkkkdmk....",
+        "...kmdkcCCCckdmk....",
+        "...kmdkCCwCCkdmk....",
+        "...kmdkcCCCckdmk....",
+        "...kmdkkkkkkkdmk....",
+        "...kkmmmgmmmmmkk....",
+        "....kkkkkkkkkkk.....",
+    ],
 ];
 
 // --------------------------------------------------------------------------------------
@@ -1157,8 +1424,8 @@ fn bayer(x: i32, y: i32) -> f32 {
 }
 
 pub const PANO_W: usize = 1280;
-pub const PANO_H: usize = 150;
-pub const HORIZON: i32 = 104;
+pub const PANO_H: usize = 208;
+pub const HORIZON: i32 = 124;
 
 /// Far layer of the 360° panorama: sky, moon, mountains, distant towers and smoke.
 /// Scrolled at a fraction of the camera's bearing for parallax.

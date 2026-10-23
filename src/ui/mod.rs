@@ -156,6 +156,23 @@ pub fn panel_frame(ui: &Ui, rect: Rect, title: &str, maker: Option<Maker>) -> Re
     if let Some(m) = maker {
         text(p, header.right_center() - Vec2::new(16.0, 0.0), Align2::RIGHT_CENTER, m.name(), pix(9.0), accent.gamma_multiply(0.8));
     }
+    // Wear: scratches and rust specks, fixed per panel so they don't crawl.
+    let seed = (rect.min.x as i32) * 31 + (rect.min.y as i32) * 7;
+    for i in 0..5 {
+        let h = crate::rng::hash2(i, seed, 3);
+        let x = rect.min.x + 6.0 + (h % (rect.width().max(8.0) as u32 - 6)) as f32;
+        let y = rect.min.y + 24.0 + ((h >> 10) % (rect.height().max(30.0) as u32 - 28)) as f32;
+        let len = 4.0 + ((h >> 20) % 10) as f32;
+        let dir = if (h >> 28) % 2 == 0 { Vec2::new(len, len * 0.3) } else { Vec2::new(len, -len * 0.2) };
+        p.line_segment([Pos2::new(x, y), Pos2::new(x, y) + dir], Stroke::new(1.0, Color32::from_rgb(34, 38, 44)));
+        p.line_segment([Pos2::new(x, y + 1.0), Pos2::new(x, y + 1.0) + dir], Stroke::new(1.0, Color32::from_rgb(10, 11, 14)));
+    }
+    for i in 0..4 {
+        let h = crate::rng::hash2(i, seed, 5);
+        let x = rect.min.x + 3.0 + (h % (rect.width().max(6.0) as u32 - 4)) as f32;
+        let y = if (h >> 12) % 2 == 0 { rect.min.y + 1.0 } else { rect.max.y - 4.0 };
+        p.rect_filled(Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0 + ((h >> 16) % 3) as f32, 2.0)), 0.0, Color32::from_rgb(96, 58, 36));
+    }
     // Rivets
     for c in [rect.left_top() + Vec2::new(5.0, 5.0), rect.right_top() + Vec2::new(-8.0, 5.0), rect.left_bottom() + Vec2::new(5.0, -8.0), rect.right_bottom() + Vec2::new(-8.0, -8.0)] {
         let r = Rect::from_min_size(c, Vec2::splat(3.0));

@@ -12,6 +12,47 @@ or cut power and sit still while the scouts close in.
 
 ![Cockpit mid-fight](docs/combat.png)
 
+![Camera wall](docs/quad.png)
+
+## Android build (Godot 4)
+
+The game is being moved to phones. `godot/` is a **Godot 4.7** port of the whole thing
+(GDScript, no plugins): the same rules, the same hand-drawn art, laid out for a landscape phone
+at a pixel-perfect 480x270 that the engine scales by whole numbers.
+
+![Godot cockpit](docs/godot/combat.png)
+
+![Godot hangar](docs/godot/hangar.png)
+
+- **Look around** by swiping the camera feed or turning the phone (gyroscope yaw). The view
+  settles on whole cameras, a flick jumps to the next one, and arcs with a dead camera show
+  static behind a bezel edge. TAB / arrow keys do the same on a keyboard.
+- **Tap** a radar blip or a contact in the feed to target it, and tap the locked contact
+  again to fire the rail. Tap a hull section (or the uplink bar) to send the repair drones
+  there, a station on the right to use it. EJECT appears on the overload banner only.
+  Keys 1-6, SPACE, V, X, E, T, P still work.
+- **Phone manners**: the app pauses when it loses focus, the back button pauses, the
+  campaign is saved between operations and resumes in the hangar, a lost op can be retried,
+  wide (20:9) screens get a riveted bezel, short buzzes mark shots and hits (toggle in the
+  pause menu, with the gyro), and the first op shows three one-line hints.
+- **No crawling through the hull.** The phone version drops the interior and the pilot
+  leaving the chair. Boarders are fried by the **PURGE** station (electrify the plating,
+  +16 heat, 20 s cooldown) or pried off by the repair drones when you send them to the boarded
+  section; the drones also rewire dead cameras when sent to the sensor head.
+- Everything else is as below: three enemies, the uplink encounter, the reactor overload, the
+  hangar with five salvage choices and the energy matrix.
+
+```sh
+godot --path godot                                        # run on the desktop (any size window)
+godot --headless --path godot --import                    # first time: build the script index
+godot --headless --path godot -s tests/test_sim.gd        # rules + 4 seeded autopilot ops
+./scripts/godot-shots.sh                                  # staged scenes -> docs/godot/*.png
+```
+
+`godot/export_presets.cfg` has an arm64 Android preset; open the project in the editor with the
+Android export templates installed and *Project > Export*. The Bevy prototype below stays as
+the desktop reference.
+
 ## What's in the prototype
 
 | Spec item | Where it is |
@@ -31,23 +72,31 @@ hangar backdrop is painted procedurally at startup, so the game ships no image a
 [VT323](https://fonts.google.com/specimen/VT323) and [Silkscreen](https://fonts.google.com/specimen/Silkscreen)
 (SIL OFL, in `assets/fonts`).
 
-### Power routing is the core verb
+### The energy matrix is set in the hangar
 
-The reactor makes **100 units**. Seven buses want **205**:
+The reactor makes **100 units**; the seven systems want **115**. In the hangar you choose what
+is wired before you walk — in battle there are no faders to fiddle with, only heat:
 
-| Bus | Cap | Effect |
+| System | Cost | Effect |
 |---|---|---|
-| LOCO | 30 | Evasive stepping. Dodges artillery and scout fire. A destroyed leg cuts it hard. |
-| SENS | 20 | Radar detection and ID range. Artillery parks *past* your default radar. |
-| RAIL | 40 | Capacitor charge rate. Each shot is +22 heat. |
-| A/C | 25 | Autocannon damage, point defence against boarding drones. Heats while firing. |
-| SHLD | 35 | Shield capacity and regen. Absorbed hits turn into heat. |
-| REPR | 25 | Repair drones work on **one** selected subsystem, or restore the uplink. |
-| COOL | 30 | Pulls heat out of the core. Scales with coolant-line health. |
+| LOCO | 15 | Evasive stepping. Dodges artillery and scout fire. A destroyed leg cuts it hard. |
+| SENS | 15 | Radar range and tighter radar-only blips. Artillery parks *past* your default radar. |
+| RAIL | 20 | Capacitor charge rate. Each shot is +26 heat. |
+| A/C | 15 | Autocannon damage and point defence against boarding drones. Heats while firing. |
+| SHLD | 15 | Shield capacity and regen. Absorbed hits turn into heat. |
+| REPR | 20 | Repair drones work on **one** selected section, or restore the uplink. |
+| COOL | 15 | Pulls heat out of the core. Scales with coolant-line health. |
 
-You can **overdrive** the bus up to 130% of available output. Past the white line every extra
-unit is heat. Past the red line you're in brownout and every system gets a proportional share.
-Boarding drones bolted to the hull feed on the bus (parasitic draw). A damaged reactor makes less.
+Bastion walks out on op 1 with everything but LOCO wired. Boarding drones bolted to the hull
+feed on the bus (parasitic draw); a damaged reactor makes less, and a brownout starves every
+system in proportion.
+
+### Stations
+
+Everything the pilot can do is a miniature on the hotbar under the camera feed, `1`–`7`:
+RAIL (`Space` too), A/C (toggle; point defence is always on), ECM, VENT, SCRAM, EJECT, CREW.
+Each shows its own charge. Fire everything at once and the core heats faster than it cools;
+an idle weapon cools.
 
 ### Heat and the failure state
 
@@ -55,22 +104,42 @@ Heat comes from the core load, overdrive, railgun shots, autocannon fire, shield
 a damaged reactor, leaking coolant, and failed interlocks after a cockpit breach. Above
 **100** the containment countdown starts (12 s). Get below 92 or lose the machine. Your outs:
 
-* **VENT** (`V`) dumps heat fast, but your shields drop for 6 s and the coolant lines take damage.
-* **SCRAM** (`X`) kills every bus for 6 s. You're cold, blind and defenceless.
+* **VENT** (`4`) dumps heat fast, but your shields drop for 6 s and the coolant lines take damage.
+* **SCRAM** (`5`) kills every bus for 6 s. You're cold, blind and defenceless.
 * **EJECT** unlocks during the countdown. You live, Bastion doesn't.
 
 ![Reactor overload](docs/overload.png)
 
+### The cameras are the sensor
+
+Four fixed hull cameras cover the quadrants: FWD 000, RIGHT 090, AFT 180, LEFT 270. The
+feed is the biggest thing on the console because it is the mech's eyes, not decoration:
+
+* A contact inside a *working* camera's 90° is **covered**: exact position, class, full
+  railgun accuracy, full autocannon damage, and its muzzle flashes are triangulated.
+* Anything else is **radar-only**. Its blip is re-sampled once per sweep with a bearing
+  error (shown as a ring) that shrinks when you route power to SENS. Railgun hit chance
+  falls with that error, the autocannon does half damage, and the station says RADAR LOCK.
+* Cameras have their own health. Fire that reaches the sensor head also hits the camera
+  facing the shooter; below 20% it shows NO SIGNAL and its quadrant goes radar-only.
+  Repair drones can't reach the mast — only the pilot can, by hand, at the sensor head —
+  or the hangar may offer a salvaged CCTV cluster.
+
+Bastion starts her first operation already scarred: the LEFT camera is dead, so one
+quadrant is radar-only from the first contact.
+
 ### Localized damage
 
-Ten sections, each with its own integrity, and each one changes how you play:
+The hull diagram is the only damage readout: colour is health, the section being hit lights
+up, boarders crawl on it, and the shield is a blue halo around the silhouette that thins as it
+drains. Ten sections, each with its own integrity, and each one changes how you play:
 
 * **Legs**: evasion. Losing one leg cuts it by 60%.
 * **Sensor array**: radar range, contact ID, camera static, ghost contacts.
 * **Coolant lines**: cooling efficiency. Below 35% they leak heat.
 * **Cockpit**: below 25% the canopy is breached and a 45 s countdown starts. When it runs
   out the reactor interlocks fail and the core heats permanently.
-* **Weapon mounts**: charge rate and damage.
+* **Weapon mounts**: charge rate and damage; a destroyed mount takes the station offline.
 * **Reactor**: output.
 * **Shield emitters**: capacity.
 * **City uplink**: the objective. Artillery can knock restore progress back down.
@@ -116,13 +185,13 @@ Or you take the **Bastion Original Spares** and try to keep her the machine she 
 
 | Input | Action |
 |---|---|
-| Click radar blip / contact row, `Tab` | Select target |
-| `Space` / FIRE | Fire railgun (needs full charge and a target inside radar range) |
-| Drag faders, `+`/`-`, `1`–`7` + `↑`/`↓` | Route power (`Shift` for ±1) |
-| ASSAULT / RESTORE | Routing presets |
-| `V` / `X` / `E` | Vent / SCRAM / ECM burst (fries nearby drones and boarders, jams scouts) |
-| Click hull diagram or row | Send repair drones there |
-| GO / LEAVE CHAIR / interior click | Crawl to a compartment |
+| `Tab` / `Shift+Tab` | Turn to the next hull camera clockwise / counter-clockwise |
+| `C` / QUAD | Camera wall: all four feeds at once |
+| Click radar blip, `T` | Select target (the nearest contact is picked for you after a kill) |
+| `1`–`7` / click a station | RAIL · A/C · ECM · VENT · SCRAM · EJECT · CREW |
+| `Space` | Fire railgun (needs full charge and a target inside radar range) |
+| Click the hull diagram | Send repair drones to that section |
+| CREW / interior click | Leave the chair and crawl to a compartment; CREW again returns |
 | `P` / `Esc` | Pause |
 
 ## Building
@@ -147,14 +216,17 @@ simulation run for a couple of seconds, then saves the window:
 
 ```sh
 ./scripts/screenshots.sh                  # all scenes, uses xvfb-run
-HZ_SCENE=combat HZ_SHOT=out.png cargo run # one scene: briefing | combat | eva | overload | hangar
+HZ_SCENE=combat HZ_SHOT=out.png cargo run # one scene: briefing | combat | quad | eva | overload | hangar
+HZ_SCENE=play HZ_SHOT=docs/play HZ_FRAMES=8 HZ_EVERY=30 cargo run   # autopilot plays; frame strip
+python3 -I scripts/strip.py docs/play strip.png 4                    # tile the frames
 ```
 
 ## Code map
 
 ```
 src/main.rs         app, states (Boot → Cockpit ⇄ Hangar), mission start / flow
-src/sim.rs          subsystems, power bus, heat, enemies, drones, shells, pilot EVA
+src/sim.rs          subsystems, power bus, heat, cameras + radar estimates, enemies, pilot EVA
+src/autopilot.rs    scripted pilot for tests and the play scene
 src/campaign.rs     scars, salvage catalogue, makers, originality
 src/art.rs          pixel sprites (text grids), hull map, procedural city + hangar
 src/ui/mod.rs       fonts, palette, riveted panels, pixel buttons and LED bars

@@ -3,6 +3,7 @@
 //! damage control and the radio.
 
 mod art;
+mod autopilot;
 mod campaign;
 mod rng;
 mod shots;
@@ -74,6 +75,10 @@ fn main() {
         .add_systems(EguiPrimaryContextPass, ui::cockpit::cockpit_ui.run_if(in_state(AppState::Cockpit)).run_if(resource_exists::<FontsReady>).after(setup_egui))
         .add_systems(EguiPrimaryContextPass, ui::hangar::hangar_ui.run_if(in_state(AppState::Hangar)).run_if(resource_exists::<FontsReady>).after(setup_egui));
     if let Some(plan) = shot {
+        if plan.is_play() {
+            app.add_systems(Update, autopilot::autopilot.run_if(mission_running))
+                .add_systems(Startup, |mut time: ResMut<Time<Virtual>>| time.set_relative_speed(4.0));
+        }
         app.insert_resource(plan).add_systems(Update, shots::run_shot_plan);
     }
     app.run();
@@ -123,12 +128,12 @@ fn start_mission(mut commands: Commands, campaign: Res<Campaign>, mut radio: Res
     *radio = Radio::default();
     fx.list.clear();
     *cmds = PilotCommands::default();
-    radio.say(Voice::System, "BASTION OS v7.31 — COLD START COMPLETE. 3 OF 9 SUBSYSTEMS REPORT FAULTS.");
-    radio.say(Voice::Control, "Bastion, City Control. Uplink mast is dark. Get it back up and hold the line.");
+    radio.say(Voice::System, "COLD START. 4 FAULTS.");
+    radio.say(Voice::Control, "Uplink's dark. Get it up, hold the line.");
     if campaign.mission > 1 {
-        radio.say(Voice::Chief, format!("Op {:02}. She's not the machine she was, kid. Neither are we.", campaign.mission));
+        radio.say(Voice::Chief, format!("Op {:02}. She's not what she was.", campaign.mission));
     } else {
-        radio.say(Voice::Chief, "Old girl hasn't walked in thirty years. Be gentle with the reactor.");
+        radio.say(Voice::Chief, "Thirty years in a shed. Go easy on the core.");
     }
 }
 
@@ -155,6 +160,7 @@ fn handle_flow(
         FlowRequest::ToHangar => {
             if let (Some(mission), Some(mech)) = (mission, mech) {
                 campaign.apply_scars(&mission, mech.kills, mech.heat_peak);
+                campaign.cameras = mech.cameras;
             }
             campaign.mission += 1;
             campaign.roll_salvage(&mut rng);

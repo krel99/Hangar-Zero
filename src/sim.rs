@@ -126,17 +126,18 @@ impl Sys {
 
     pub fn long_name(self) -> &'static str {
         match self {
-            Sys::Locomotion => "Locomotion: evasive stepping, dodges shells",
-            Sys::Sensors => "Sensors: radar range and contact ID",
-            Sys::Railgun => "Railgun: capacitor charge rate",
-            Sys::Autocannon => "Autocannon: rate of fire / point defence",
-            Sys::Shields => "Shield array: capacity and regen",
-            Sys::Repair => "Repair drones: fix the selected subsystem",
-            Sys::Cooling => "Cooling: pulls heat out of the core",
+            Sys::Locomotion => "dodge shells and scouts",
+            Sys::Sensors => "radar range, tighter blips",
+            Sys::Railgun => "capacitor charge",
+            Sys::Autocannon => "point defence, scouts",
+            Sys::Shields => "absorbs hits, costs heat",
+            Sys::Repair => "drones fix one section",
+            Sys::Cooling => "pulls heat from the core",
         }
     }
 
     /// Maximum units the bus to this system can carry.
+    #[allow(dead_code)]
     pub fn cap(self) -> f32 {
         match self {
             Sys::Locomotion => 30.0,
@@ -149,6 +150,7 @@ impl Sys {
         }
     }
 
+    #[allow(dead_code)]
     pub fn default_alloc(self) -> f32 {
         match self {
             Sys::Locomotion => 10.0,
@@ -180,6 +182,26 @@ pub fn crawl_time(s: Section) -> f32 {
     2.0 + 0.9 * (s.deck() as f32 - Section::Cockpit.deck() as f32).abs()
 }
 
+/// Four fixed hull cameras, one per quadrant.
+pub const CAMERAS: usize = 4;
+pub const CAMERA_HP: f32 = 60.0;
+/// Below this a camera has no usable picture.
+pub const CAMERA_MIN: f32 = 12.0;
+pub const CAMERA_FOV: f32 = PI / 2.0;
+pub const CAMERA_NAMES: [&str; CAMERAS] = ["FWD", "RIGHT", "AFT", "LEFT"];
+
+/// Bearing a camera points at.
+pub fn camera_bearing(cam: usize) -> f32 {
+    cam as f32 * CAMERA_FOV
+}
+
+/// Which camera's quadrant a bearing falls in.
+pub fn camera_for(angle: f32) -> usize {
+    (((angle + CAMERA_FOV / 2.0).rem_euclid(TAU)) / CAMERA_FOV) as usize % CAMERAS
+}
+
+/// Heat per railgun shot.
+pub const RAIL_HEAT: f32 = 26.0;
 pub const OVERDRIVE: f32 = 1.3;
 /// Heat per second for every unit drawn past the reactor's rated output.
 pub const OVERDRIVE_HEAT: f32 = 0.25;
@@ -222,6 +244,14 @@ pub struct Mech {
     pub hit_flash: f32,
     pub shake: f32,
     pub kills: u32,
+    /// Hull camera health; a dead camera leaves its quadrant radar-only.
+    pub cameras: [f32; CAMERAS],
+    /// Seconds-ish since each section last took damage (1 = just now), for the diagram.
+    pub hit_t: [f32; 10],
+    /// Cameras working when the op began; the CAM alarm only fires for losses since.
+    pub cams_at_start: usize,
+    pub active_cam: usize,
+    pub quad_view: bool,
     /// Snapshot of the derived numbers for the UI.
     pub stats: Derived,
 }
@@ -249,10 +279,7 @@ impl Mech {
     pub fn new(campaign: &Campaign) -> Self {
         let mut hp = campaign.max_hp;
         hp[Section::Uplink.idx()] = 0.0;
-        let mut alloc = [0.0; 7];
-        for s in Sys::ALL {
-            alloc[s.idx()] = s.default_alloc();
-        }
+        let alloc = campaign.alloc();
         Self {
             hp,
             max_hp: campaign.max_hp,
@@ -283,6 +310,11 @@ impl Mech {
             hit_flash: 0.0,
             shake: 0.0,
             kills: 0,
+            cameras: campaign.cameras,
+            hit_t: [0.0; 10],
+            cams_at_start: campaign.cameras.iter().filter(|c| **c >= CAMERA_MIN).count(),
+            active_cam: 0,
+            quad_view: false,
             stats: Derived::default(),
         }
         .with_stats(&campaign.mods)
@@ -306,6 +338,19 @@ impl Mech {
         }
     }
 
+    pub fn camera_ok(&self, cam: usize) -> bool {
+        self.cameras[cam] >= CAMERA_MIN && self.hp[Section::Sensors.idx()] > 0.0
+    }
+
+    /// True when a working camera is looking at this bearing.
+    pub fn covers(&self, angle: f32) -> bool {
+        self.camera_ok(camera_for(angle))
+    }
+
+    pub fn cameras_up(&self) -> usize {
+        (0..CAMERAS).filter(|c| self.camera_ok(*c)).count()
+    }
+
     pub fn uplink(&self) -> f32 {
         self.hp[Section::Uplink.idx()]
     }
@@ -313,6 +358,9 @@ impl Mech {
     pub fn damage(&mut self, s: Section, amount: f32) {
         let i = s.idx();
         self.hp[i] = (self.hp[i] - amount).max(0.0);
+        if amount > 0.3 {
+            self.hit_t[i] = 1.0;
+        }
     }
 }
 
@@ -368,6 +416,21 @@ pub struct Enemy {
     pub drones: u32,
     pub hit_flash: f32,
     pub reveal: f32,
+    /// Where the radar thinks it is (exact when a camera covers it).
+    pub est_angle: f32,
+    pub est_dist: f32,
+    /// Bearing error of the estimate in radians; 0 when camera-covered.
+    pub err: f32,
+    pub covered: bool,
+    /// Mission time of the last radar sample.
+    pub last_sweep: f32,
+}
+
+impl Enemy {
+    /// Hit-chance multiplier for a shot aimed at the radar estimate.
+    pub fn aim_factor(&self) -> f32 {
+        if self.covered { 1.0 } else { (1.0 - self.err.to_degrees() / 12.0).clamp(0.25, 1.0) }
+    }
 }
 
 /// Boarding drone in flight.
@@ -537,6 +600,7 @@ impl Plugin for SimPlugin {
                     tick_mission,
                     spawn_waves,
                     power_and_heat,
+                    sensor_fusion,
                     pilot_actions,
                     weapons,
                     enemy_ai,
@@ -608,6 +672,11 @@ pub fn spawn_enemy(commands: &mut Commands, rng: &mut Rng, mission: &mut Mission
         drones: 4,
         hit_flash: 0.0,
         reveal: 0.0,
+        est_angle: angle,
+        est_dist: dist,
+        err: 0.0,
+        covered: false,
+        last_sweep: -10.0,
     });
 }
 
@@ -639,22 +708,26 @@ fn spawn_waves(
     }
     mission.next_wave += 1;
     let bearing = rng.range(0.0, TAU);
+    // One callout per wave, naming the heaviest thing in it.
+    let heaviest = kinds.iter().copied().max_by_key(|k| match k {
+        EnemyKind::Artillery => 2,
+        EnemyKind::Carrier => 1,
+        EnemyKind::Scout => 0,
+    });
+    let n = kinds.len();
     for kind in kinds {
         let a = bearing + rng.range(-0.5, 0.5);
         let d = rng.range(950.0, 1100.0);
         spawn_enemy(&mut commands, &mut rng, &mut mission, kind, a, d);
-        match kind {
-            EnemyKind::Scout => {}
-            EnemyKind::Artillery => radio.say(
-                Voice::Control,
-                format!("Bastion, seismic thump bearing {:03.0}. Something heavy is setting up out there.", bearing_deg(a)),
-            ),
-            EnemyKind::Carrier => radio.say(
-                Voice::Control,
-                format!("Hive signature bearing {:03.0}. Carrier class. Don't let the ticks latch on.", bearing_deg(a)),
-            ),
-        }
     }
+    let brg = bearing_deg(bearing);
+    let line = match heaviest {
+        Some(EnemyKind::Artillery) => format!("Heavy contact bearing {brg:03.0}. Crab."),
+        Some(EnemyKind::Carrier) => format!("Carrier bearing {brg:03.0}. Watch for ticks."),
+        _ if n > 1 => format!("{n} scouts bearing {brg:03.0}."),
+        _ => format!("Scout bearing {brg:03.0}."),
+    };
+    radio.say(Voice::Control, line);
 }
 
 pub fn bearing_deg(a: f32) -> f32 {
@@ -712,6 +785,9 @@ fn power_and_heat(
         *t = (*t - dt).max(0.0);
     }
     mech.hit_flash = (mech.hit_flash - dt * 2.5).max(0.0);
+    for t in mech.hit_t.iter_mut() {
+        *t = (*t - dt * 1.5).max(0.0);
+    }
     mech.shake = (mech.shake - dt * 3.0).max(0.0);
 
     // --- Emergency actions -------------------------------------------------------------
@@ -720,21 +796,20 @@ fn power_and_heat(
         mech.vent_cd = 25.0;
         mech.shields_down_t = 6.0;
         mech.damage(Section::Coolant, 4.0);
-        radio.say(Voice::System, "COOLANT VENT OPEN. SHIELD EMITTERS OFFLINE 6s.");
+        radio.say(Voice::System, "VENTING. SHIELDS DOWN 6s.");
     }
     if std::mem::take(&mut cmds.scram) && mech.scram_cd <= 0.0 {
         mech.scram_t = 6.0;
         mech.scram_cd = 30.0;
-        radio.say(Voice::System, "SCRAM. CONTROL RODS DOWN. ALL BUSES DEAD FOR 6s.");
-        radio.say(Voice::Pilot, "Come on, come on... stay cold for me.");
+        radio.say(Voice::System, "SCRAM. ALL BUSES DEAD 6s.");
     }
 
     // --- Cockpit breach --------------------------------------------------------------
     if mech.frac(Section::Cockpit) < 0.25 && !mech.interlocks_failed {
         if mech.breach.is_none() {
             mech.breach = Some(BREACH_TIME);
-            radio.say(Voice::System, "COCKPIT BREACH. LIFE SUPPORT ON RESERVE. REACTOR INTERLOCKS ON MANUAL.");
-            radio.say(Voice::Chief, "Patch that canopy, kid! When the air goes, so do the reactor interlocks.");
+            radio.say(Voice::System, "COCKPIT BREACH. 45s TO INTERLOCK FAILURE.");
+            radio.say(Voice::Chief, "Patch the canopy, kid.");
         }
     } else if mech.frac(Section::Cockpit) >= 0.35 && mech.breach.is_some() {
         mech.breach = None;
@@ -745,7 +820,7 @@ fn power_and_heat(
         if *t <= 0.0 {
             mech.breach = None;
             mech.interlocks_failed = true;
-            radio.say(Voice::System, "INTERLOCK FAILURE. REACTOR REGULATION LOST. CORE HEAT RISING.");
+            radio.say(Voice::System, "INTERLOCKS FAILED. CORE RUNNING AWAY.");
         }
     }
 
@@ -753,22 +828,22 @@ fn power_and_heat(
     if mech.heat >= HEAT_CRIT {
         if mech.overload.is_none() {
             mech.overload = Some(OVERLOAD_TIME);
-            radio.say(Voice::System, "!! REACTOR OVERLOAD !! CONTAINMENT FAILURE IMMINENT.");
-            radio.say(Voice::Chief, "Vent it, SCRAM it, or get out of there!");
+            radio.say(Voice::System, "REACTOR OVERLOAD. 12s.");
+            radio.say(Voice::Chief, "Vent it, scram it, or get out!");
         }
     } else if mech.heat < 92.0 && mech.overload.is_some() {
         mech.overload = None;
-        radio.say(Voice::System, "Core temperature receding. Overload countdown aborted.");
+        radio.say(Voice::System, "Core cooling. Overload aborted.");
         radio.say(Voice::Pilot, "...Breathe.");
     }
     if let Some(t) = mech.overload.as_mut() {
         *t -= dt;
     }
     if mech.heat > 80.0 && mission.warn_once("heat80") {
-        radio.say(Voice::Chief, "Core's running hot. Ease off the rail or give me more cooling.");
+        radio.say(Voice::Chief, "Core's hot. Ease off.");
     }
     if n_boarders > 0.0 && mission.warn_once("hack") {
-        radio.say(Voice::System, format!("PARASITIC DRAW DETECTED: -{:.0} UNITS", parasitic));
+        radio.say(Voice::System, format!("PARASITIC DRAW -{:.0}u", parasitic));
     }
 
     mech.stats = st;
@@ -800,14 +875,15 @@ pub fn derive(mech: &Mech, m: &Mods, n_boarders: f32) -> Derived {
     let legs = (mech.eff(Section::LeftLeg) + mech.eff(Section::RightLeg)) * 0.5;
     let leg_penalty = if mech.hp[Section::LeftLeg.idx()] <= 0.0 || mech.hp[Section::RightLeg.idx()] <= 0.0 { 0.4 } else { 1.0 };
     let evasion = (eff[Sys::Locomotion.idx()] / 30.0 * m.loco_mult * legs * leg_penalty).clamp(0.0, 1.0);
-    let cooling = eff[Sys::Cooling.idx()] * 0.5 * m.cooling_mult * mech.eff(Section::Coolant);
+    // Passive radiators plus whatever the cooling bus is wired for.
+    let cooling = (2.0 + eff[Sys::Cooling.idx()] * 0.6) * m.cooling_mult * mech.eff(Section::Coolant);
     let shield_cap = eff[Sys::Shields.idx()] * 4.0 * m.shield_mult * mech.eff(Section::ShieldGen);
-    let rail_rate = eff[Sys::Railgun.idx()] / 40.0 * 0.3 * m.rail_charge_mult * mech.eff(Section::Railgun);
+    let rail_rate = eff[Sys::Railgun.idx()] / 40.0 * 0.4 * m.rail_charge_mult * mech.eff(Section::Railgun);
     let ac_dps = eff[Sys::Autocannon.idx()] * 0.7 * m.ac_mult * mech.eff(Section::Autocannon);
     let repair_rate = eff[Sys::Repair.idx()] * 0.16 * m.repair_mult;
 
     // --- Heat ----------------------------------------------------------------------
-    let mut heat_in = (1.0 + delivered * 0.03) * m.base_heat_mult + overdrive * OVERDRIVE_HEAT;
+    let mut heat_in = (1.0 + delivered * 0.025) * m.base_heat_mult + overdrive * OVERDRIVE_HEAT;
     heat_in += (1.0 - mech.frac(Section::Reactor)) * 4.0;
     if mech.frac(Section::Coolant) < 0.35 {
         heat_in += 2.5;
@@ -816,7 +892,7 @@ pub fn derive(mech: &Mech, m: &Mods, n_boarders: f32) -> Derived {
         heat_in += 3.0;
     }
     if mech.ac_firing {
-        heat_in += eff[Sys::Autocannon.idx()] * 0.14;
+        heat_in += eff[Sys::Autocannon.idx()] * 0.2;
     }
     let mut heat_out = cooling;
     if mech.scram_t > 0.0 {
@@ -860,7 +936,7 @@ fn pilot_actions(
     {
         let dur = crawl_time(to);
         mech.pilot = Pilot::Crawling { to, t: 0.0, dur };
-        radio.say(Voice::Pilot, format!("Leaving the chair. Crawling to the {}.", to.name().to_lowercase()));
+        radio.say(Voice::Pilot, format!("Going to the {}.", to.name().to_lowercase()));
     }
     let want_return = std::mem::take(&mut cmds.return_to_seat);
     mech.pilot = match mech.pilot {
@@ -881,7 +957,7 @@ fn pilot_actions(
                 if !here.is_empty() {
                     if t >= 2.2 {
                         commands.entity(here[0]).despawn();
-                        radio.say(Voice::Pilot, "Got one. Pried it off with the wrench.");
+                        radio.say(Voice::Pilot, "Got one.");
                         Pilot::Working { at, t: 0.0 }
                     } else {
                         Pilot::Working { at, t }
@@ -893,6 +969,16 @@ fn pilot_actions(
                         mech.hp[i] = (mech.hp[i] + 0.35 * dt).min(100.0);
                     } else {
                         mech.hp[i] = (mech.hp[i] + 5.0 * dt).min(mech.max_hp[i]);
+                    }
+                    // Mast cameras can only be fixed by hand: worst one first.
+                    if at == Section::Sensors
+                        && let Some(cam) = (0..CAMERAS).filter(|c| mech.cameras[*c] < CAMERA_HP).min_by(|a, b| mech.cameras[*a].total_cmp(&mech.cameras[*b]))
+                    {
+                        let was_dead = mech.cameras[cam] < CAMERA_MIN;
+                        mech.cameras[cam] = (mech.cameras[cam] + 4.0 * dt).min(CAMERA_HP);
+                        if was_dead && mech.cameras[cam] >= CAMERA_MIN {
+                            radio.say(Voice::Pilot, format!("{} camera's back.", CAMERA_NAMES[cam]));
+                        }
                     }
                     Pilot::Working { at, t }
                 }
@@ -942,19 +1028,21 @@ fn weapons(
         if let Some(te) = tgt {
             let (_, mut e) = enemies.get_mut(te).unwrap();
             mech.rail_charge = 0.0;
-            mech.heat += 22.0 + m.rail_heat;
+            mech.heat += RAIL_HEAT + m.rail_heat;
             mech.shake = 1.0;
             let mut p = 0.92 * (0.5 + 0.5 * mech.eff(Section::Sensors));
             if e.kind == EnemyKind::Scout {
                 p -= 0.15;
             }
-            fx.add(FxKind::Rail, e.angle, e.dist, 0.45);
+            p *= e.aim_factor();
+            // The shot goes where the radar says the target is.
+            fx.add(FxKind::Rail, e.est_angle, e.est_dist, 0.45);
             if rng.chance(p) {
                 e.hp -= 75.0 * m.rail_damage_mult;
                 e.hit_flash = 0.4;
                 fx.add(FxKind::Explosion, e.angle, e.dist, 0.7);
             } else {
-                radio.say(Voice::Pilot, "Missed! Recharging...");
+                radio.say(Voice::Pilot, "Miss.");
             }
         }
     }
@@ -1002,11 +1090,12 @@ fn weapons(
             if let Some(te) = chosen {
                 let (_, mut e) = enemies.get_mut(te).unwrap();
                 let falloff = 1.0 - (e.dist / AC_RANGE) * 0.5;
-                e.hp -= st.ac_dps * falloff * dt;
+                let blind = if e.covered { 1.0 } else { 0.5 };
+                e.hp -= st.ac_dps * falloff * blind * dt;
                 e.hit_flash = e.hit_flash.max(0.08);
                 mech.ac_firing = true;
                 if mech.ac_burst_t > 0.12 {
-                    fx.add(FxKind::Tracer, e.angle + rng.range(-0.02, 0.02), e.dist, 0.15);
+                    fx.add(FxKind::Tracer, e.est_angle + rng.range(-0.02, 0.02), e.est_dist, 0.15);
                     mech.ac_burst_t = 0.0;
                 }
             }
@@ -1037,7 +1126,7 @@ fn weapons(
                 e.stun = 3.5;
             }
         }
-        radio.say(Voice::System, format!("ECM BURST. {fried} hostile drone(s) fried. Nearby contacts jammed."));
+        radio.say(Voice::System, format!("ECM. {fried} drones fried."));
     }
 
     // --- Kills ----------------------------------------------------------------------------
@@ -1047,12 +1136,17 @@ fn weapons(
             commands.entity(e).despawn();
             mech.kills += 1;
             if mech.target == Some(e) {
-                mech.target = None;
+                // Acquire the nearest remaining contact so the next shot is not lost to a keypress.
+                mech.target = enemies
+                    .iter()
+                    .filter(|(o, en)| *o != e && en.hp > 0.0 && en.dist <= st.radar_range)
+                    .min_by(|a, b| a.1.dist.total_cmp(&b.1.dist))
+                    .map(|(o, _)| o);
             }
             let line = match en.kind {
                 EnemyKind::Scout => "Scout down.",
-                EnemyKind::Artillery => "Crab's cracked open. Artillery silenced.",
-                EnemyKind::Carrier => "Carrier destroyed. No more ticks from that one.",
+                EnemyKind::Artillery => "Crab down.",
+                EnemyKind::Carrier => "Carrier down.",
             };
             radio.say(Voice::Pilot, line);
         }
@@ -1094,7 +1188,7 @@ fn enemy_ai(
                         e.timer = rng.range(1.6, 2.4);
                         fx.add(FxKind::Muzzle, e.angle, e.dist, 0.2);
                         let close = if e.dist < 250.0 { 1.0 } else { 0.7 };
-                        if rng.chance(0.65 * close * (1.0 - 0.6 * evasion)) {
+                        if rng.chance(0.5 * close * (1.0 - 0.6 * evasion)) {
                             const TARGETS: [Section; 7] = [
                                 Section::Sensors,
                                 Section::Cockpit,
@@ -1105,7 +1199,8 @@ fn enemy_ai(
                                 Section::Coolant,
                             ];
                             let s = TARGETS[rng.index(TARGETS.len())];
-                            hit_mech(&mut mech, &mut mission, s, rng.range(5.0, 8.0));
+                            let from = e.angle;
+                            hit_mech(&mut mech, &mut mission, s, rng.range(4.0, 7.0), Some(from));
                         }
                     }
                 }
@@ -1122,13 +1217,15 @@ fn enemy_ai(
                     if e.timer <= 0.0 {
                         e.state = EnemyState::Engaged;
                         e.timer = 0.5;
-                        radio.say(Voice::Enemy, format!("[INTERCEPT] {}-{:02}: braced. Ranging on the walker.", e.kind.callsign(), e.serial));
+                        radio.say(Voice::Enemy, format!("{}-{:02} braced. Ranging.", e.kind.callsign(), e.serial));
                     }
                 }
                 EnemyState::Engaged => {
                     if e.timer <= 0.0 {
                         e.timer = rng.range(8.0, 10.0);
-                        e.reveal = 3.0;
+                        if mech.covers(e.angle) {
+                            e.reveal = 3.0;
+                        }
                         fx.add(FxKind::Muzzle, e.angle, e.dist, 0.4);
                         const TARGETS: [(Section, u32); 7] = [
                             (Section::Reactor, 3),
@@ -1163,7 +1260,7 @@ fn enemy_ai(
                         e.drones -= 1;
                         commands.spawn(Drone { angle: e.angle, dist: e.dist - 10.0, hp: 14.0 });
                         if mission.warn_once("first_drone") {
-                            radio.say(Voice::Chief, "Boarding drones! Point defence on, or they'll chew through the hull.");
+                            radio.say(Voice::Chief, "Boarders. Point defence on.");
                         }
                     }
                 }
@@ -1173,16 +1270,61 @@ fn enemy_ai(
     }
 }
 
-fn hit_mech(mech: &mut Mech, mission: &mut Mission, s: Section, dmg: f32) {
+/// Returns the camera that died, if the hit killed one.
+fn hit_mech(mech: &mut Mech, mission: &mut Mission, s: Section, dmg: f32, from: Option<f32>) -> Option<usize> {
     let absorbed = dmg.min(mech.shield);
     mech.shield -= absorbed;
     mech.heat += absorbed * 0.35;
     mech.shield_hit_t = 0.0;
     let rest = dmg - absorbed;
+    let mut died = None;
     if rest > 0.0 {
         mech.damage(s, rest);
         mission.damage_taken[s.idx()] += rest;
         mech.hit_flash = 1.0;
+        // Fire that reaches the sensor head also chews the camera facing the shooter.
+        if s == Section::Sensors
+            && let Some(a) = from
+        {
+            let cam = camera_for(a);
+            let was_ok = mech.cameras[cam] >= CAMERA_MIN;
+            mech.cameras[cam] = (mech.cameras[cam] - rest * 1.5).max(0.0);
+            if was_ok && mech.cameras[cam] < CAMERA_MIN {
+                died = Some(cam);
+            }
+        }
+    }
+    died
+}
+
+/// Radar contacts: a camera-covered contact is tracked exactly; anything else is a
+/// blip re-sampled on every sweep pass with an error that sensor power shrinks.
+fn sensor_fusion(mut rng: ResMut<Rng>, mech: Res<Mech>, campaign: Res<Campaign>, mission: Res<Mission>, mut enemies: Query<&mut Enemy>) {
+    let st = mech.stats;
+    let sens = st.eff[Sys::Sensors.idx()];
+    let head = mech.frac(Section::Sensors);
+    let base_err = (3.0 + 14.0 * (1.0 - (sens / 20.0).min(1.0))) * (1.6 - 0.6 * head) + campaign.mods.radar_err;
+    for mut e in enemies.iter_mut() {
+        let covered = mech.covers(e.angle) && e.dist <= 950.0;
+        if covered {
+            e.covered = true;
+            e.err = 0.0;
+            e.est_angle = e.angle;
+            e.est_dist = e.dist;
+            continue;
+        }
+        let was_covered = e.covered;
+        e.covered = false;
+        // Did the sweep cross this contact since the last sample?
+        let since = (mech.sweep - e.angle).rem_euclid(TAU);
+        let passed = (since < 0.12 && mission.time - e.last_sweep > 1.0) || was_covered;
+        if passed || e.last_sweep < -5.0 {
+            e.last_sweep = mission.time;
+            let err = base_err.to_radians();
+            e.err = err;
+            e.est_angle = (e.angle + rng.range(-err, err)).rem_euclid(TAU);
+            e.est_dist = (e.dist * (1.0 + rng.range(-0.12, 0.12) * (base_err / 17.0))).max(20.0);
+        }
     }
 }
 
@@ -1211,7 +1353,7 @@ fn drones(
             ];
             let s = SPOTS[rng.index(SPOTS.len())];
             commands.spawn(Boarder { section: s, age: 0.0 });
-            radio.say(Voice::System, format!("HULL CONTACT: boarding drone latched onto {}.", s.name()));
+            radio.say(Voice::System, format!("BOARDER ON {}.", s.name()));
         }
     }
 }
@@ -1231,21 +1373,24 @@ fn shells(
         s.t += dt;
         if s.t >= s.flight {
             commands.entity(e).despawn();
-            let p = 0.85 - 0.55 * mech.stats.evasion;
+            let p = 0.7 - 0.5 * mech.stats.evasion;
             if rng.chance(p) {
-                let dmg = if s.target == Section::Uplink { 8.0 } else { rng.range(16.0, 24.0) };
-                hit_mech(&mut mech, &mut mission, s.target, dmg);
+                let dmg = if s.target == Section::Uplink { 8.0 } else { rng.range(14.0, 20.0) };
+                let d1 = hit_mech(&mut mech, &mut mission, s.target, dmg, Some(s.angle));
                 let splash = Section::ALL[rng.index(9)];
-                hit_mech(&mut mech, &mut mission, splash, 5.0);
+                let d2 = hit_mech(&mut mech, &mut mission, splash, 5.0, Some(s.angle));
+                if let Some(cam) = d1.or(d2) {
+                    radio.say(Voice::System, format!("CAMERA {} LOST.", CAMERA_NAMES[cam]));
+                }
                 mech.shake = 1.4;
                 fx.add(FxKind::ShellImpact, s.angle, 30.0, 0.8);
                 if s.target == Section::Uplink {
-                    radio.say(Voice::Control, "Uplink took a hit! Restore progress lost.");
+                    radio.say(Voice::Control, "Uplink hit. Progress lost.");
                 }
             } else {
                 fx.add(FxKind::ShellImpact, s.angle + 0.4, 120.0, 0.8);
                 if mission.warn_once("dodge") {
-                    radio.say(Voice::Pilot, "Stepped clear of that one. Keep the legs moving.");
+                    radio.say(Voice::Pilot, "Stepped clear.");
                 }
             }
         }
@@ -1265,7 +1410,7 @@ fn boarders(time: Res<Time>, campaign: Res<Campaign>, mut mech: ResMut<Mech>, mu
 fn check_outcome(mut mech: ResMut<Mech>, mut mission: ResMut<Mission>, mut radio: ResMut<Radio>, mut cmds: ResMut<PilotCommands>) {
     if mech.uplink() >= 100.0 {
         mission.outcome = Some(Outcome::Victory);
-        radio.say(Voice::Control, "Uplink green! The city grid is talking to us again. Bring her home, Bastion.");
+        radio.say(Voice::Control, "Uplink green. Bring her home.");
     } else if mech.overload.is_some_and(|t| t <= 0.0) {
         mission.outcome = Some(Outcome::Meltdown);
         mech.heat = HEAT_MAX;
@@ -1300,50 +1445,6 @@ mod tests {
 
     use super::*;
 
-    /// A crude pilot: keeps repair on the uplink, snipes what it can see, vents
-    /// when hot and pushes sensors up once artillery starts landing.
-    fn autopilot(
-        mut mech: ResMut<Mech>,
-        mut cmds: ResMut<PilotCommands>,
-        enemies: Query<(Entity, &Enemy)>,
-        boarders: Query<&Boarder>,
-    ) {
-        let range = mech.stats.radar_range;
-        let pick = enemies
-            .iter()
-            .filter(|(_, e)| e.dist <= range)
-            .max_by_key(|(_, e)| match e.kind {
-                EnemyKind::Artillery => 3,
-                EnemyKind::Carrier => 2,
-                EnemyKind::Scout => 1,
-            })
-            .map(|(e, _)| e);
-        mech.target = pick;
-        mech.alloc = if mech.heat > 60.0 { [5.0, 20.0, 10.0, 10.0, 10.0, 15.0, 30.0] } else { [5.0, 20.0, 20.0, 10.0, 10.0, 20.0, 15.0] };
-        if mech.heat < 70.0 && mech.rail_charge >= 1.0 {
-            cmds.fire_rail = true;
-        }
-        if mech.heat > 88.0 {
-            cmds.vent = true;
-        }
-        if mech.overload.is_some() {
-            cmds.scram = true;
-        }
-        let worst = Section::ALL[..9].iter().copied().min_by(|a, b| mech.frac(*a).total_cmp(&mech.frac(*b))).unwrap();
-        mech.repair_target = if mech.frac(worst) < 0.3 { worst } else { Section::Uplink };
-        if let Some(b) = boarders.iter().next()
-            && mech.pilot.in_seat()
-            && boarders.iter().count() >= 3
-        {
-            cmds.crawl_to = Some(b.section);
-        }
-        if let Pilot::Working { at, .. } = mech.pilot
-            && boarders.iter().all(|b| b.section != at)
-        {
-            cmds.return_to_seat = true;
-        }
-    }
-
     fn run(seed: u64, with_pilot: bool) -> (Option<Outcome>, f32, f32, f32) {
         let r = run_full(seed, with_pilot);
         (r.0, r.1, r.2, r.3)
@@ -1362,7 +1463,7 @@ mod tests {
         mission.briefing = false;
         app.insert_resource(mission);
         if with_pilot {
-            app.add_systems(Update, autopilot.before(tick_mission));
+            app.add_systems(Update, crate::autopilot::autopilot.before(tick_mission));
         }
         for i in 0..(20 * 600) {
             app.update();

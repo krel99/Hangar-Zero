@@ -67,6 +67,8 @@ pub struct Mods {
     pub ac_mult: f32,
     pub hack_mult: f32,
     pub base_heat_mult: f32,
+    /// Extra bearing error, in degrees, on radar-only contacts.
+    pub radar_err: f32,
 }
 
 impl Default for Mods {
@@ -84,6 +86,7 @@ impl Default for Mods {
             ac_mult: 1.0,
             hack_mult: 1.0,
             base_heat_mult: 1.0,
+            radar_err: 0.0,
         }
     }
 }
@@ -99,6 +102,7 @@ pub enum PartId {
     TramBattery,
     OriginalSpares,
     FuelRods,
+    CctvHead,
 }
 
 pub struct PartInfo {
@@ -206,8 +210,19 @@ pub const PARTS: &[PartInfo] = &[
     },
 ];
 
+pub const CCTV_PART: PartInfo = PartInfo {
+    id: PartId::CctvHead,
+    name: "Transit CCTV Cluster",
+    maker: Maker::CivicTransit,
+    section: Section::Sensors,
+    pros: "All four hull cameras restored to full",
+    cons: "Low-light tram optics: radar-only error +2°",
+    flavor: "Watched platform 4 for twenty years. Now it watches for you.",
+    icon: 9,
+};
+
 pub fn part(id: PartId) -> &'static PartInfo {
-    PARTS.iter().find(|p| p.id == id).unwrap()
+    if id == PartId::CctvHead { &CCTV_PART } else { PARTS.iter().find(|p| p.id == id).unwrap() }
 }
 
 #[derive(Clone, Debug)]
@@ -229,24 +244,56 @@ pub struct Campaign {
     pub originality: f32,
     pub salvage: Vec<PartId>,
     pub last_report: Option<MissionReport>,
+    /// Hull camera health carried between operations.
+    pub cameras: [f32; crate::sim::CAMERAS],
+    /// Energy matrix: which systems are wired to the reactor. Set in the hangar.
+    pub matrix: [bool; 7],
 }
 
 impl Default for Campaign {
     fn default() -> Self {
+        // She was never fully repaired after the war: the left camera is dead and
+        // three sections carry old scars before the first operation.
+        let mut max_hp = [100.0; 10];
+        max_hp[Section::LeftLeg.idx()] = 70.0;
+        max_hp[Section::Sensors.idx()] = 80.0;
+        max_hp[Section::Coolant.idx()] = 85.0;
         Self {
             mission: 1,
-            max_hp: [100.0; 10],
+            max_hp,
             makers: [Maker::Bastion; 10],
             mods: Mods::default(),
             installed: Vec::new(),
             originality: 100.0,
             salvage: Vec::new(),
             last_report: None,
+            cameras: [crate::sim::CAMERA_HP, crate::sim::CAMERA_HP, crate::sim::CAMERA_HP, 0.0],
+            matrix: DEFAULT_MATRIX,
         }
     }
 }
 
+/// Reactor draw of each wired system, in `Sys` order (LOCO, SENS, RAIL, A/C, SHLD, REPR, COOL).
+pub const MATRIX_COST: [f32; 7] = [15.0, 15.0, 20.0, 15.0, 15.0, 20.0, 15.0];
+/// Op 1 loadout: everything but locomotion (the left leg is scarred anyway).
+pub const DEFAULT_MATRIX: [bool; 7] = [false, true, true, true, true, true, true];
+
 impl Campaign {
+    /// Power each bus gets in battle: its fixed cost if wired, else nothing.
+    pub fn alloc(&self) -> [f32; 7] {
+        let mut a = [0.0; 7];
+        for i in 0..7 {
+            if self.matrix[i] {
+                a[i] = MATRIX_COST[i];
+            }
+        }
+        a
+    }
+
+    pub fn matrix_draw(&self) -> f32 {
+        (0..7).filter(|i| self.matrix[*i]).map(|i| MATRIX_COST[i]).sum()
+    }
+
     /// Permanent wear: every mission leaves scars proportional to damage taken.
     pub fn apply_scars(&mut self, mission: &Mission, kills: u32, heat_peak: f32) {
         let mut scars = Vec::new();
@@ -268,6 +315,9 @@ impl Campaign {
     pub fn roll_salvage(&mut self, rng: &mut Rng) {
         let mut pool: Vec<PartId> = PARTS.iter().map(|p| p.id).filter(|id| !self.installed.contains(id) || *id == PartId::OriginalSpares).collect();
         self.salvage.clear();
+        if self.cameras.iter().any(|c| *c < crate::sim::CAMERA_HP) {
+            self.salvage.push(PartId::CctvHead);
+        }
         while self.salvage.len() < 5 && !pool.is_empty() {
             let i = rng.index(pool.len());
             self.salvage.push(pool.remove(i));
@@ -326,6 +376,10 @@ impl Campaign {
             PartId::FuelRods => {
                 m.reactor_output += 20.0;
                 m.base_heat_mult *= 1.25;
+            }
+            PartId::CctvHead => {
+                self.cameras = [crate::sim::CAMERA_HP; crate::sim::CAMERAS];
+                m.radar_err += 2.0;
             }
         }
         if id != PartId::OstravaActuator && id != PartId::OriginalSpares {
