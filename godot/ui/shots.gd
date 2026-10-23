@@ -3,7 +3,7 @@
 class_name Shots
 extends RefCounted
 
-const SCENES := ["briefing", "combat", "quad", "eva", "overload", "hangar"]
+const SCENES := ["briefing", "combat", "boarded", "overload", "hangar"]
 
 
 static func deg(d: float) -> float:
@@ -13,7 +13,7 @@ static func deg(d: float) -> float:
 static func settle(scene: String) -> float:
 	match scene:
 		"briefing", "hangar": return 1.5
-		"eva": return 3.0
+		"boarded": return 3.0
 		_: return 2.4
 
 
@@ -106,24 +106,25 @@ static func stage_combat(scene: String, sim: Sim) -> void:
 			mech.heat_peak = 112.0
 			_say(sim, 129.0, V.SYSTEM, "REACTOR OVERLOAD. 12s.")
 			_say(sim, 129.2, V.CHIEF, "Vent it, scram it, or get out!")
-		"eva":
+		"boarded":
 			_mk(sim, K.CARRIER, 4, deg(300), 345, E.ENGAGED, 96, 150, 1)
 			_mk(sim, K.SCOUT, 6, deg(340), 470, E.APPROACH, 60, 60, -1)
 			_boarder(sim, S.COOLANT, 10)
 			_boarder(sim, S.COOLANT, 6)
 			_boarder(sim, S.RAILGUN, 3)
 			_drone(sim, deg(300), 220)
-			mech.pilot = Rules.PilotState.WORKING
-			mech.pilot_at = S.COOLANT
-			mech.pilot_t = 0.4
 			mech.heat = 58.0
+			mech.purge_cd = 9.0
+			mech.fight_work = 6.0
+			mech.view = deg(330)
 			mech.hp[S.COOLANT] = 41.0
 			mech.hp[S.RAILGUN] = 64.0
 			mech.hp[S.SENSORS] = 80.0
 			mech.hp[S.UPLINK] = 44.0
-			mech.repair_target = S.UPLINK
+			mech.repair_target = S.COOLANT
 			lock_serial = 4
-			_say(sim, 129.0, V.PILOT, "Going to the coolant lines.")
+			_say(sim, 127.0, V.SYSTEM, "BOARDER ON RAILGUN MOUNT.")
+			_say(sim, 129.0, V.CHIEF, "Three ticks on you. Purge when it's cold enough.")
 		_:
 			# Mid-fight. The artillery sits in the dead LEFT quadrant: radar-only aim.
 			_mk(sim, K.SCOUT, 5, deg(22), 230, E.ENGAGED, 41, 60, 1)

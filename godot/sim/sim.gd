@@ -1,5 +1,5 @@
 ## The whole combat simulation for one operation. `step(dt)` runs the systems in a fixed
-## order: clock, waves, power & heat, sensor fusion, pilot, weapons, enemy AI, drones,
+## order: clock, waves, power & heat, sensor fusion, weapons, enemy AI, drones,
 ## shells, boarders, outcome. The UI only reads state and raises `cmd_*` flags.
 class_name Sim
 extends RefCounted
@@ -38,8 +38,7 @@ var cmd_vent := false
 var cmd_scram := false
 var cmd_ecm := false
 var cmd_eject := false
-var cmd_crawl_to := -1
-var cmd_return := false
+var cmd_purge := false
 
 
 func _init(c: Campaign, seed_value: int) -> void:
@@ -87,7 +86,6 @@ func step(raw_dt: float) -> void:
 	_spawn_waves()
 	_power_and_heat(dt)
 	_sensor_fusion()
-	_pilot_actions(dt)
 	_weapons(dt)
 	_enemy_ai(dt)
 	_drones(dt)
@@ -248,18 +246,41 @@ func _power_and_heat(dt: float) -> void:
 		var regen: float = eff[Rules.Sys.SHLD] * (0.5 if mech.shield_hit_t > 1.5 else 0.15)
 		mech.shield = minf(mech.shield + regen * dt, st.shield_cap)
 
+	# Repair drones: pry boarders off the target section first, then fix it. At the
+	# sensor head they also rewire the worst camera.
 	var rt := mech.repair_target
 	if mech.alloc[Rules.Sys.REPR] > 0.0:
-		if rt == Rules.Section.UPLINK:
-			mech.hp[rt] = minf(mech.hp[rt] + eff[Rules.Sys.REPR] * Rules.UPLINK_RATE * campaign.repair_mult * dt, 100.0)
+		var here: Array = boarders.filter(func(b): return b.section == rt)
+		if not here.is_empty():
+			mech.fight_work += st.repair_rate * dt
+			if mech.fight_work >= Rules.BOARDER_WORK:
+				boarders.erase(here[0])
+				mech.fight_work = 0.0
+				radio.say(Rules.Voice.SYSTEM, "DRONES CLEARED %s." % Rules.SECTION_SHORT[rt])
 		else:
-			mech.hp[rt] = minf(mech.hp[rt] + st.repair_rate * dt, mech.max_hp[rt])
+			mech.fight_work = 0.0
+			if rt == Rules.Section.UPLINK:
+				mech.hp[rt] = minf(mech.hp[rt] + eff[Rules.Sys.REPR] * Rules.UPLINK_RATE * campaign.repair_mult * dt, 100.0)
+			else:
+				mech.hp[rt] = minf(mech.hp[rt] + st.repair_rate * dt, mech.max_hp[rt])
+			if rt == Rules.Section.SENSORS:
+				var cam := -1
+				for c in Rules.CAMERAS:
+					if mech.cameras[c] < Rules.CAMERA_HP and (cam < 0 or mech.cameras[c] < mech.cameras[cam]):
+						cam = c
+				if cam >= 0:
+					var was_dead := mech.cameras[cam] < Rules.CAMERA_MIN
+					mech.cameras[cam] = minf(mech.cameras[cam] + st.repair_rate * 1.2 * dt, Rules.CAMERA_HP)
+					if was_dead and mech.cameras[cam] >= Rules.CAMERA_MIN:
+						radio.say(Rules.Voice.SYSTEM, "%s CAMERA ONLINE." % Rules.CAMERA_NAMES[cam])
 
 	mech.vent_t = maxf(mech.vent_t - dt, 0.0)
 	mech.vent_cd = maxf(mech.vent_cd - dt, 0.0)
 	mech.scram_t = maxf(mech.scram_t - dt, 0.0)
 	mech.scram_cd = maxf(mech.scram_cd - dt, 0.0)
 	mech.ecm_cd = maxf(mech.ecm_cd - dt, 0.0)
+	mech.purge_cd = maxf(mech.purge_cd - dt, 0.0)
+	mech.purge_t = maxf(mech.purge_t - dt, 0.0)
 	mech.hit_flash = maxf(mech.hit_flash - dt * 2.5, 0.0)
 	for i in Rules.SECTIONS:
 		mech.hit_t[i] = maxf(mech.hit_t[i] - dt * 1.5, 0.0)
@@ -347,77 +368,20 @@ func _sensor_fusion() -> void:
 # Pilot out of the chair
 # ---------------------------------------------------------------------------------------
 
-func _pilot_actions(dt: float) -> void:
-	if cmd_crawl_to >= 0:
-		if mech.in_seat():
-			mech.pilot = Rules.PilotState.CRAWLING
-			mech.pilot_at = cmd_crawl_to
-			mech.pilot_t = 0.0
-			mech.pilot_dur = Rules.crawl_time(cmd_crawl_to)
-			radio.say(Rules.Voice.PILOT, "Going to the %s." % Rules.SECTION_NAME[cmd_crawl_to].to_lower())
-		cmd_crawl_to = -1
-	var want_return := cmd_return
-	cmd_return = false
-	match mech.pilot:
-		Rules.PilotState.CRAWLING:
-			mech.pilot_t += dt
-			if mech.pilot_t >= mech.pilot_dur:
-				mech.pilot = Rules.PilotState.WORKING
-				mech.pilot_t = 0.0
-		Rules.PilotState.WORKING:
-			var at := mech.pilot_at
-			if want_return:
-				mech.pilot = Rules.PilotState.RETURNING
-				mech.pilot_t = 0.0
-				mech.pilot_dur = Rules.crawl_time(at)
-				return
-			mech.pilot_t += dt
-			var here: Array = boarders.filter(func(b): return b.section == at)
-			if not here.is_empty():
-				if mech.pilot_t >= 2.2:
-					boarders.erase(here[0])
-					radio.say(Rules.Voice.PILOT, "Got one.")
-					mech.pilot_t = 0.0
-			else:
-				# Hands-on repair needs no reactor power.
-				if at == Rules.Section.UPLINK:
-					mech.hp[at] = minf(mech.hp[at] + 0.35 * dt, 100.0)
-				else:
-					mech.hp[at] = minf(mech.hp[at] + 5.0 * dt, mech.max_hp[at])
-				# Mast cameras can only be fixed by hand: worst one first.
-				if at == Rules.Section.SENSORS:
-					var cam := -1
-					for c in Rules.CAMERAS:
-						if mech.cameras[c] < Rules.CAMERA_HP and (cam < 0 or mech.cameras[c] < mech.cameras[cam]):
-							cam = c
-					if cam >= 0:
-						var was_dead := mech.cameras[cam] < Rules.CAMERA_MIN
-						mech.cameras[cam] = minf(mech.cameras[cam] + 4.0 * dt, Rules.CAMERA_HP)
-						if was_dead and mech.cameras[cam] >= Rules.CAMERA_MIN:
-							radio.say(Rules.Voice.PILOT, "%s camera's back." % Rules.CAMERA_NAMES[cam])
-		Rules.PilotState.RETURNING:
-			mech.pilot_t += dt
-			if mech.pilot_t >= mech.pilot_dur:
-				mech.pilot = Rules.PilotState.SEAT
-				mech.pilot_at = Rules.Section.COCKPIT
-				radio.say(Rules.Voice.PILOT, "Back in the chair.")
-
-
 # ---------------------------------------------------------------------------------------
 # Weapons
 # ---------------------------------------------------------------------------------------
 
 func _weapons(dt: float) -> void:
 	var st := mech.st
-	var seated := mech.in_seat()
 	if mech.target >= 0 and enemy_by_id(mech.target) == null:
 		mech.target = -1
 
 	# Railgun
 	mech.rail_charge = minf(mech.rail_charge + st.rail_rate * dt, 1.0)
-	var fire := cmd_fire_rail or (mech.rail_auto and seated)
+	var fire := cmd_fire_rail or mech.rail_auto
 	cmd_fire_rail = false
-	if fire and seated and mech.rail_charge >= 1.0:
+	if fire and mech.rail_charge >= 1.0:
 		var e := target()
 		if e and e.dist <= st.radar_range:
 			mech.rail_charge = 0.0
@@ -438,7 +402,7 @@ func _weapons(dt: float) -> void:
 
 	# Autocannon
 	mech.ac_firing = false
-	if seated and st.ac_dps > 0.0 and mech.weapons_free:
+	if st.ac_dps > 0.0 and mech.weapons_free:
 		mech.ac_burst_t += dt
 		var drone_target: Entities.Drone = null
 		if mech.point_defence:
@@ -477,7 +441,7 @@ func _weapons(dt: float) -> void:
 	# Electronic warfare
 	if cmd_ecm:
 		cmd_ecm = false
-		if seated and mech.ecm_cd <= 0.0 and st.eff[Rules.Sys.SENS] >= 5.0:
+		if mech.ecm_cd <= 0.0 and st.eff[Rules.Sys.SENS] >= 5.0:
 			mech.ecm_cd = 28.0
 			mech.heat += 12.0
 			add_fx(Rules.Fx.ECM, 0.0, 0.0, 1.0)
@@ -495,6 +459,18 @@ func _weapons(dt: float) -> void:
 				if e.dist < 400.0:
 					e.stun = 3.5
 			radio.say(Rules.Voice.SYSTEM, "ECM. %d drones fried." % fried)
+
+	# Purge: run the reactor through the hull plating. Every tick on it dies; the core pays.
+	if cmd_purge:
+		cmd_purge = false
+		if mech.purge_cd <= 0.0 and mech.scram_t <= 0.0:
+			mech.purge_cd = Rules.PURGE_CD
+			mech.purge_t = 0.6
+			mech.heat += Rules.PURGE_HEAT
+			var n := boarders.size()
+			boarders.clear()
+			mech.fight_work = 0.0
+			radio.say(Rules.Voice.SYSTEM, "PURGE. %d boarders fried." % n if n > 0 else "PURGE. Hull clear.")
 
 	# Kills
 	for e in enemies.duplicate():

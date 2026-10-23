@@ -62,7 +62,7 @@ func modal_open() -> bool:
 # ---------------------------------------------------------------------------------------
 
 func update(dt: float) -> void:
-	if sim.mission.running() and sim.mech.in_seat() and absf(gyro_rate) > 0.02:
+	if sim.mission.running() and absf(gyro_rate) > 0.02:
 		sim.mech.view = fposmod(sim.mech.view + gyro_rate * dt, TAU)
 
 
@@ -322,7 +322,7 @@ func _hull(ci: CanvasItem) -> void:
 				var v := Hull.at(x, y)
 				if v == rt and (Hull.at(x - 1, y) != v or Hull.at(x + 1, y) != v or Hull.at(x, y - 1) != v or Hull.at(x, y + 1) != v):
 					ci.draw_rect(_cell(x, y), Color8(240, 130, 60), false, 1.0)
-	# Boarders, shells, the pilot
+	# Boarders and incoming shells
 	for s in Rules.SECTIONS:
 		var n: int = boarders_on[s]
 		for i in n:
@@ -336,8 +336,8 @@ func _hull(ci: CanvasItem) -> void:
 			Theme2.ring(ci, cc, rr, Theme2.RED)
 			ci.draw_line(cc - Vector2(rr + 2, 0), cc + Vector2(rr + 2, 0), Theme2.RED)
 			ci.draw_line(cc - Vector2(0, rr + 2), cc + Vector2(0, rr + 2), Theme2.RED)
-	if mech.pilot == Rules.PilotState.WORKING or mech.pilot == Rules.PilotState.CRAWLING:
-		Pixel.draw(ci, Sprites.PILOT, _hull_centroid[mech.pilot_at] - Vector2(5, 8))
+	if mech.purge_t > 0.0:
+		ci.draw_rect(HULL_BOX, Color(0.7, 0.9, 1.0, mech.purge_t * 0.9))
 	# Readouts under the diagram
 	Theme2.text(ci, Vector2(2, 196), "DRN>%s" % Rules.SECTION_SHORT[rt], Color8(240, 130, 60), 12)
 	if mech.cameras_up() < Rules.CAMERAS:
@@ -437,7 +437,6 @@ func _slots() -> Array:
 	var mech := sim.mech
 	var st: Dictionary = mech.st
 	var c := sim.campaign
-	var seated := mech.in_seat()
 	var target := sim.target()
 	var rail_dead: bool = mech.hp[Rules.Section.RAILGUN] <= 0.0
 	var ac_dead: bool = mech.hp[Rules.Section.AUTOCANNON] <= 0.0
@@ -475,25 +474,23 @@ func _slots() -> Array:
 		ac = ["SAFE", Theme2.DIM]
 	var ecm_ok: bool = mech.ecm_cd <= 0.0 and st.eff[Rules.Sys.SENS] >= 5.0
 	var nb := sim.boarders.size()
-	var crew: Array
-	match mech.pilot:
-		Rules.PilotState.SEAT:
-			crew = ["%d BOARDERS" % nb if nb > 0 else "IN CHAIR", Theme2.PURPLE if nb > 0 else Theme2.DIM]
-		Rules.PilotState.CRAWLING:
-			crew = ["CRAWLING", Theme2.AMBER]
-		Rules.PilotState.WORKING:
-			crew = [Rules.SECTION_SHORT[mech.pilot_at], Theme2.AMBER]
-		_:
-			crew = ["RETURNING", Theme2.AMBER]
+	var purge_ok: bool = mech.purge_cd <= 0.0 and mech.scram_t <= 0.0
+	var purge: Array
+	if mech.purge_cd > 0.0:
+		purge = ["%ds" % int(ceilf(mech.purge_cd)), Theme2.DIM]
+	elif nb > 0:
+		purge = ["%d BOARDER%s" % [nb, "S" if nb > 1 else ""], Theme2.PURPLE]
+	else:
+		purge = ["+%d HEAT" % int(Rules.PURGE_HEAT), Theme2.DIM]
 	var overload := mech.overload >= 0.0
 	return [
-		["RAIL", Theme2.CYAN, mech.rail_charge, rail[0], rail[1], seated and rail_ready and lock and mech.scram_t <= 0.0, rail_ready and lock],
+		["RAIL", Theme2.CYAN, mech.rail_charge, rail[0], rail[1], rail_ready and lock and mech.scram_t <= 0.0, rail_ready and lock],
 		["A/C", Theme2.YELLOW, 1.0 - fmod(t * 1.5, 1.0) if mech.ac_firing else 1.0, ac[0], ac[1], not ac_dead and c.matrix[Rules.Sys.AC], mech.weapons_free and not ac_dead],
-		["ECM", Theme2.CYAN, 1.0 - mech.ecm_cd / 28.0, "READY" if ecm_ok else ("%ds" % int(mech.ecm_cd) if mech.ecm_cd > 0.0 else "NO SENSORS"), Theme2.GREEN if ecm_ok else Theme2.DIM, ecm_ok and seated, ecm_ok],
-		["VENT", Color8(150, 230, 255), 1.0 - mech.vent_cd / 25.0, "VENTING" if mech.vent_t > 0.0 else ("%ds" % int(mech.vent_cd) if mech.vent_cd > 0.0 else "-20 HEAT/s"), Theme2.GREEN if mech.vent_cd <= 0.0 else Theme2.DIM, mech.vent_cd <= 0.0 and seated, mech.vent_t > 0.0],
-		["SCRAM", Theme2.AMBER, 1.0 - mech.scram_cd / 30.0, "DEAD %ds" % int(mech.scram_t) if mech.scram_t > 0.0 else ("%ds" % int(mech.scram_cd) if mech.scram_cd > 0.0 else "KILL BUSES"), Theme2.GREEN if mech.scram_cd <= 0.0 else Theme2.DIM, mech.scram_cd <= 0.0 and seated, mech.scram_t > 0.0],
+		["ECM", Theme2.CYAN, 1.0 - mech.ecm_cd / 28.0, "READY" if ecm_ok else ("%ds" % int(mech.ecm_cd) if mech.ecm_cd > 0.0 else "NO SENSORS"), Theme2.GREEN if ecm_ok else Theme2.DIM, ecm_ok, ecm_ok],
+		["VENT", Color8(150, 230, 255), 1.0 - mech.vent_cd / 25.0, "VENTING" if mech.vent_t > 0.0 else ("%ds" % int(mech.vent_cd) if mech.vent_cd > 0.0 else "-20 HEAT/s"), Theme2.GREEN if mech.vent_cd <= 0.0 else Theme2.DIM, mech.vent_cd <= 0.0, mech.vent_t > 0.0],
+		["SCRAM", Theme2.AMBER, 1.0 - mech.scram_cd / 30.0, "DEAD %ds" % int(mech.scram_t) if mech.scram_t > 0.0 else ("%ds" % int(mech.scram_cd) if mech.scram_cd > 0.0 else "KILL BUSES"), Theme2.GREEN if mech.scram_cd <= 0.0 else Theme2.DIM, mech.scram_cd <= 0.0, mech.scram_t > 0.0],
 		["EJECT", Theme2.RED, 1.0 if overload else 0.0, "NOW" if overload else "LOCKED", Theme2.RED if overload else Theme2.DIM, overload, overload and fmod(t * 3.0, 1.0) < 0.5],
-		["CREW" if seated else "RETURN", Theme2.PURPLE, 1.0, crew[0], crew[1], seated or mech.pilot == Rules.PilotState.WORKING, nb > 0 and seated],
+		["PURGE", Theme2.PURPLE, 1.0 - mech.purge_cd / Rules.PURGE_CD, purge[0], purge[1], purge_ok, purge_ok and nb > 0],
 	]
 
 
@@ -517,21 +514,6 @@ func _stations(ci: CanvasItem) -> void:
 		Theme2.label(ci, r.position + Vector2(69, 11), str(i + 1), Theme2.dim(color, 0.6), 8, 2)
 
 
-func _crew_destination() -> int:
-	var mech := sim.mech
-	if not sim.boarders.is_empty():
-		return sim.boarders[0].section
-	if mech.cameras_up() < Rules.CAMERAS:
-		return Rules.Section.SENSORS
-	var worst := Rules.Section.REACTOR
-	for s in Rules.SECTIONS:
-		if s == Rules.Section.COCKPIT or s == Rules.Section.UPLINK:
-			continue
-		if mech.frac(s) < mech.frac(worst):
-			worst = s
-	return worst
-
-
 func _station(i: int) -> void:
 	var mech := sim.mech
 	match i:
@@ -543,11 +525,7 @@ func _station(i: int) -> void:
 		5:
 			if mech.overload >= 0.0:
 				sim.cmd_eject = true
-		6:
-			if mech.in_seat():
-				sim.cmd_crawl_to = _crew_destination()
-			elif mech.pilot == Rules.PilotState.WORKING:
-				sim.cmd_return = true
+		6: sim.cmd_purge = true
 
 
 # ---------------------------------------------------------------------------------------
@@ -578,7 +556,7 @@ func _modals(ci: CanvasItem) -> void:
 			["CONTROL", Theme2.CYAN, "The uplink on your mast is down. Without it the shield grid stays dark tonight."],
 			["ODA", Theme2.AMBER, "Hold position; the drones rebuild the uplink. Your LEFT camera is dead: anything west is radar-only, wider error, worse shots."],
 			["ODA", Theme2.AMBER, "Every shot heats the core. Past 100, containment goes in 12 seconds. VENT dumps heat but drops shields; SCRAM kills everything for 6."],
-			["CONTROL", Theme2.CYAN, "Scouts, Crabs beyond your radar, Carriers that board you. What's lit on the hull is what's being hit."],
+			["CONTROL", Theme2.CYAN, "Scouts, Crabs beyond your radar, Carriers that board you: PURGE fries boarders, or send the drones at them. What's lit on the hull is what's being hit."],
 		]
 		var y := r.position.y + 34.0
 		for l in lines:
@@ -636,7 +614,7 @@ func _modals(ci: CanvasItem) -> void:
 			["drag / gyro", "look around (TAB snaps cameras)"],
 			["tap blip", "select target (T cycles)"],
 			["tap hull", "send repair drones there"],
-			["stations", "rail, a/c, ECM, vent, scram, eject, crew"],
+			["stations", "rail, a/c, ECM, vent, scram, eject, purge"],
 			["SPACE", "fire railgun"],
 		]
 		var y := r.position.y + 40.0
@@ -675,7 +653,7 @@ func press(p: Vector2) -> void:
 		if _station_rects[i].has_point(p):
 			_down_station = i
 			return
-	_press_in_feed = Rect2(FEED_POS, Vector2(Feed.W, Feed.H)).has_point(p) and sim.mech.in_seat()
+	_press_in_feed = Rect2(FEED_POS, Vector2(Feed.W, Feed.H)).has_point(p)
 
 
 func drag(p: Vector2, rel: Vector2) -> void:
@@ -707,14 +685,7 @@ func release(p: Vector2) -> void:
 		if s >= 0:
 			mech.repair_target = s
 	elif Rect2(FEED_POS, Vector2(Feed.W, Feed.H)).has_point(p):
-		if mech.in_seat():
-			_pick_in_feed(p)
-		elif feed.return_btn.has_point(p):
-			sim.cmd_return = true
-		else:
-			for sec in feed.rooms:
-				if feed.rooms[sec].has_point(p):
-					sim.cmd_crawl_to = sec
+		_pick_in_feed(p)
 
 
 func _pick_blip(p: Vector2) -> void:

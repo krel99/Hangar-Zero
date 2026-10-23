@@ -1,5 +1,5 @@
 ## A crude scripted pilot used by the tests and the `play` tool: snipes what it can see,
-## vents when hot, scrams on overload, leaves the chair when the hull is crawling.
+## vents when hot, scrams on overload, purges or sends the drones after boarders.
 class_name Autopilot
 extends RefCounted
 
@@ -32,12 +32,8 @@ static func act(sim: Sim) -> void:
 		if mech.frac(s) < mech.frac(worst):
 			worst = s
 	mech.repair_target = worst if mech.frac(worst) < 0.3 else Rules.Section.UPLINK
-	if sim.boarders.size() >= 3 and mech.in_seat():
-		sim.cmd_crawl_to = sim.boarders[0].section
-	if mech.pilot == Rules.PilotState.WORKING:
-		var still_here := false
-		for b in sim.boarders:
-			if b.section == mech.pilot_at:
-				still_here = true
-		if not still_here:
-			sim.cmd_return = true
+	if not sim.boarders.is_empty():
+		if sim.boarders.size() >= 2 and mech.purge_cd <= 0.0 and mech.heat < 80.0:
+			sim.cmd_purge = true
+		else:
+			mech.repair_target = sim.boarders[0].section

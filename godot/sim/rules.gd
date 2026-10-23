@@ -10,15 +10,12 @@ enum EState { APPROACH, DEPLOYING, ENGAGED }
 enum Voice { CONTROL, CHIEF, PILOT, ENEMY, SYSTEM }
 enum Fx { RAIL, TRACER, EXPLOSION, MUZZLE, SHELL_IMPACT, ECM }
 enum Outcome { NONE, VICTORY, MELTDOWN, EJECTED }
-enum PilotState { SEAT, CRAWLING, WORKING, RETURNING }
 
 const SECTIONS := 10
 const SYSTEMS := 7
 
 const SECTION_NAME := ["REACTOR", "COCKPIT", "SENSOR ARRAY", "COOLANT LINES", "LEFT LEG", "RIGHT LEG", "RAILGUN MOUNT", "AUTOCANNON MOUNT", "SHIELD EMITTERS", "CITY UPLINK"]
 const SECTION_SHORT := ["RCT", "CPT", "SNS", "CLT", "L-LEG", "R-LEG", "RAIL", "A/C", "SHLD", "UPLNK"]
-## Interior deck (0 = top of the mast, 4 = hips); drives crawl times.
-const SECTION_DECK := [3, 1, 0, 3, 4, 4, 2, 2, 2, 0]
 
 const SYS_NAME := ["LOCO", "SENS", "RAIL", "A/C", "SHLD", "REPR", "COOL"]
 const SYS_BLURB := ["dodge shells and scouts", "radar range, tighter blips", "capacitor charge", "point defence, scouts", "absorbs hits, costs heat", "drones fix one section", "pulls heat from the core"]
@@ -48,6 +45,11 @@ const BREACH_TIME := 45.0
 const AC_RANGE := 420.0
 ## Uplink restore percent per second per unit of repair power.
 const UPLINK_RATE := 0.018
+## PURGE: electrify the hull, frying every latched boarder.
+const PURGE_HEAT := 16.0
+const PURGE_CD := 20.0
+## Drone-work needed to pry one boarder off its section (repair_rate per second).
+const BOARDER_WORK := 12.0
 const RADAR_SCALE_M := 820.0
 
 
@@ -59,8 +61,6 @@ static func camera_for(angle: float) -> int:
 	return int(fposmod(angle + CAMERA_FOV / 2.0, TAU) / CAMERA_FOV) % CAMERAS
 
 
-static func crawl_time(s: int) -> float:
-	return 2.0 + 0.9 * absf(SECTION_DECK[s] - SECTION_DECK[Section.COCKPIT])
 
 
 static func bearing_deg(a: float) -> float:

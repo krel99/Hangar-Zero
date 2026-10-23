@@ -29,6 +29,10 @@ at a pixel-perfect 480x270 that the engine scales by whole numbers.
 - **Tap** a radar blip or a contact in the feed to target it, a hull section to send the
   repair drones there, a station on the right to use it. Keys 1-7, SPACE, V, X, E, T, P still
   work.
+- **No crawling through the hull.** The phone version drops the interior and the pilot
+  leaving the chair. Boarders are fried by the **PURGE** station (electrify the plating,
+  +16 heat, 20 s cooldown) or pried off by the repair drones when you send them to the boarded
+  section; the drones also rewire dead cameras when sent to the sensor head.
 - Everything else is as below: three enemies, the uplink encounter, the reactor overload, the
   hangar with five salvage choices and the energy matrix.
 

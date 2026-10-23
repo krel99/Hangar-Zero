@@ -31,8 +31,11 @@ the feed, gyro yaw (`Input.get_gyroscope()` about the gravity axis, untestable h
 TAB/arrows snapping to camera bearings. `ui/hangar.gd` is the between-ops screen; `ui/main.gd`
 owns the campaign, the sim and the screenshot plan; `ui/shots.gd` stages the scenes.
 
-- `sim/` is a line-for-line port of `src/sim.rs` + `campaign.rs` (`rules.gd` holds the enums
-  and constants). Keep the two in step when touching balance, or note the divergence.
+- `sim/` is a port of `src/sim.rs` + `campaign.rs` (`rules.gd` holds the enums and constants).
+  Known divergence: **no pilot EVA / interior** in Godot. Boarders are cleared by the PURGE
+  station (`cmd_purge`, `PURGE_HEAT`, `PURGE_CD`) or by the repair drones when the repair
+  target is the boarded section (`BOARDER_WORK`); drones at SENSORS rewire the worst camera.
+  Staged scenes are `briefing combat boarded overload hangar` (`ui/shots.gd`).
 - `art/sprites.gd` holds the grids, `art/pixel.gd` bakes them to cached textures,
   `art/hull.gd` the section map + detail overlay, `art/city.gd` the panorama and hangar.
 - GDScript gotchas met so far: `var x := [a, b][i]` fails to parse (type cannot be inferred;

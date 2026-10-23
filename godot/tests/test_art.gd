@@ -9,7 +9,7 @@ func _init() -> void:
 	for rows in [Sprites.SCOUT, Sprites.ARTILLERY, Sprites.CARRIER, Sprites.FACE_PILOT, Sprites.ARM_RAIL]:
 		var tex := Pixel.texture(rows)
 		assert(tex.get_width() > 0)
-	for g in Sprites.ICONS + Sprites.PROPS + Sprites.HOTBAR:
+	for g in Sprites.ICONS + Sprites.HOTBAR:
 		Pixel.texture(g)
 	print("sprites: %d ms" % (Time.get_ticks_msec() - t0))
 	t0 = Time.get_ticks_msec()

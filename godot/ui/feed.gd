@@ -1,5 +1,5 @@
 ## The camera feed: a 320x208 window onto the city at the bearing the pilot is looking.
-## Arcs with no working hull camera show static. Also hosts the interior cutaway.
+## Arcs with no working hull camera show static.
 class_name Feed
 extends RefCounted
 
@@ -10,9 +10,6 @@ const FOV := Rules.CAMERA_FOV
 var sim: Sim
 var origin := Vector2.ZERO
 var t := 0.0
-## Tap targets for the interior (room rects by section) refreshed each draw.
-var rooms: Dictionary = {}
-var return_btn := Rect2()
 
 
 func set_sim(s: Sim) -> void:
@@ -50,9 +47,6 @@ func _pano(ci: CanvasItem, tex: Texture2D, u0: float) -> void:
 func draw(ci: CanvasItem, now: float) -> void:
 	t = now
 	var mech := sim.mech
-	if not mech.in_seat():
-		draw_interior(ci)
-		return
 	var view := mech.view
 	City.ensure()
 	_pano(ci, City.far_tex, (view * 0.6 - FOV / 2.0) / TAU)
@@ -353,123 +347,3 @@ func _hud(ci: CanvasItem, view: float) -> void:
 		ci.draw_rect(r, Theme2.RED, false, 2.0)
 		Theme2.label(ci, px(W / 2.0, 42), "REACTOR OVERLOAD", Theme2.RED, 8, 1)
 		Theme2.text(ci, px(W / 2.0, 56), "CONTAINMENT IN %.1fs" % maxf(mech.overload, 0.0), Color.WHITE if fmod(t * 4.0, 1.0) < 0.5 else Theme2.RED, 12, 1)
-
-
-# ---------------------------------------------------------------------------------------
-# Interior cutaway, shown while the pilot is out of the chair
-# ---------------------------------------------------------------------------------------
-
-const DECKS := [
-	[Rules.Section.SENSORS, Rules.Section.UPLINK],
-	[Rules.Section.COCKPIT],
-	[Rules.Section.AUTOCANNON, Rules.Section.SHIELD_GEN, Rules.Section.RAILGUN],
-	[Rules.Section.COOLANT, Rules.Section.REACTOR],
-	[Rules.Section.LEFT_LEG, Rules.Section.RIGHT_LEG],
-]
-const DECK_W := [140.0, 110.0, 280.0, 200.0, 180.0]
-
-
-func draw_interior(ci: CanvasItem) -> void:
-	var mech := sim.mech
-	ci.draw_rect(Rect2(origin, Vector2(W, H)), Color8(14, 12, 14))
-	rooms.clear()
-	for d in DECKS.size():
-		var y0 := 6.0 + d * 36.0
-		var w: float = DECK_W[d]
-		var x0 := (W - w) / 2.0
-		var rw: float = w / DECKS[d].size()
-		for i in DECKS[d].size():
-			rooms[DECKS[d][i]] = Rect2(px(x0 + i * rw, y0), Vector2(rw - 2.0, 32.0))
-	# Ladder shaft
-	ci.draw_rect(Rect2(px(156, 6), Vector2(8, 180)), Color8(30, 28, 30))
-	var ly := 8.0
-	while ly < 186.0:
-		ci.draw_rect(Rect2(px(157, ly), Vector2(6, 1)), Color8(90, 80, 60))
-		ly += 4.0
-	for sec in rooms.keys():
-		var r: Rect2 = rooms[sec]
-		var f := mech.uplink() / 100.0 if sec == Rules.Section.UPLINK else mech.frac(sec)
-		var hc := Hull.health_color(f)
-		ci.draw_rect(r.grow(3), Color8(58, 54, 62))
-		ci.draw_rect(r, Color8(36, 34, 40))
-		ci.draw_rect(r, Color8(70, 66, 72), false, 1.0)
-		# Conduit and lamp
-		ci.draw_rect(Rect2(r.position + Vector2(2, 2), Vector2(r.size.x - 4, 1)), Color8(80, 66, 50))
-		var flicker := f > 0.35 or Rng.hash2(int(t * 17.0), sec, 8) % 5 != 0
-		var lamp := Vector2(r.get_center().x, r.position.y + 4)
-		if flicker:
-			ci.draw_rect(Rect2(lamp - Vector2(2, 0), Vector2(4, 1)), Color8(255, 236, 190))
-			ci.draw_rect(Rect2(lamp - Vector2(8, 0), Vector2(16, 8)), Color(1, 0.9, 0.67, 0.06))
-		# Steam from damaged plumbing
-		if f < 0.7 and sec != Rules.Section.UPLINK:
-			for i in 5:
-				var h := Rng.hash2(i, sec, 19)
-				var phase := fmod(t * 1.3 + (h % 100) / 25.0, 1.0)
-				var sx := r.position.x + (6 + (h >> 8) % 12) + phase * 6.0
-				var sy := r.end.y - 6.0 - phase * 12.0
-				ci.draw_rect(Rect2(Vector2(sx, sy), Vector2.ONE * (1.0 + phase * 2.0)), Color(0.86, 0.88, 0.9, (1.0 - phase) * 0.43 * (1.0 - f)))
-		Theme2.label(ci, r.position + Vector2(3, 11), Rules.SECTION_SHORT[sec], hc, 8)
-		var blink := f < 0.35 and fmod(t * 4.0, 1.0) < 0.5
-		ci.draw_rect(Rect2(r.position + Vector2(r.size.x - 5, 2), Vector2(2, 2)), Color.BLACK if blink else hc)
-		# Machinery
-		var prop: Array = Sprites.PROPS[sec]
-		Pixel.draw(ci, prop, Vector2(r.position.x + 30, r.end.y - prop.size() - 4))
-		if sec == Rules.Section.REACTOR:
-			ci.draw_rect(Rect2(Vector2(r.position.x + 33, r.end.y - 11), Vector2(8, 4)), Color(1, 0.7, 0.3, 0.24 * Theme2.pulse(t, 0.4)))
-		# Boarders
-		var n := 0
-		for b in sim.boarders:
-			if b.section == sec:
-				var wig := roundf(sin(t * 6.0 + n))
-				Pixel.draw(ci, Sprites.TICK, Vector2(r.end.x - 12.0 - n * 11.0, r.end.y - 11.0 + wig), 1.0, n % 2 == 1)
-				n += 1
-	# The pilot
-	var pos: Vector2
-	var status: String
-	var floor_of := func(s: int) -> Vector2:
-		var rr: Rect2 = rooms[s]
-		return Vector2(rr.get_center().x, rr.end.y - 13.0)
-	var ladder_x := px(160, 0).x
-	var path := func(to: int, f: float) -> Vector2:
-		var a: Vector2 = floor_of.call(Rules.Section.COCKPIT)
-		var b: Vector2 = floor_of.call(to)
-		if f < 0.5:
-			var g := f * 2.0
-			return Vector2(a.x + (ladder_x - a.x) * minf(g, 0.3) / 0.3, a.y + (b.y - a.y) * (maxf(g - 0.3, 0.0) / 0.7))
-		return Vector2(ladder_x + (b.x - ladder_x) * ((f - 0.5) * 2.0), b.y)
-	match mech.pilot:
-		Rules.PilotState.CRAWLING:
-			pos = path.call(mech.pilot_at, mech.pilot_t / mech.pilot_dur)
-			status = "CRAWLING TO %s ... %ds" % [Rules.SECTION_NAME[mech.pilot_at], ceili(mech.pilot_dur - mech.pilot_t)]
-		Rules.PilotState.WORKING:
-			pos = floor_of.call(mech.pilot_at)
-			var at := mech.pilot_at
-			var nb := sim.boarders.filter(func(b): return b.section == at).size()
-			var cam := -1
-			if at == Rules.Section.SENSORS:
-				for c in Rules.CAMERAS:
-					if mech.cameras[c] < Rules.CAMERA_HP and (cam < 0 or mech.cameras[c] < mech.cameras[cam]):
-						cam = c
-			if nb > 0:
-				status = "FIGHTING BOARDERS (%d) ... %d%%" % [nb, int(minf(mech.pilot_t / 2.2 * 100.0, 100.0))]
-			elif cam >= 0:
-				status = "REWIRING %s CAMERA ... %d%%" % [Rules.CAMERA_NAMES[cam], int(mech.cameras[cam] / Rules.CAMERA_HP * 100.0)]
-			elif mech.frac(at) < 1.0 or (at == Rules.Section.UPLINK and mech.uplink() < 100.0):
-				status = "HAND REPAIR: %s" % Rules.SECTION_NAME[at]
-			else:
-				status = "%s: NOTHING TO FIX" % Rules.SECTION_NAME[at]
-		_:
-			pos = path.call(mech.pilot_at, 1.0 - mech.pilot_t / mech.pilot_dur)
-			status = "RETURNING TO CHAIR ... %ds" % ceili(mech.pilot_dur - mech.pilot_t)
-	Pixel.draw(ci, Sprites.PILOT, pos - Vector2(4, 0))
-	if mech.pilot == Rules.PilotState.WORKING:
-		Pixel.draw(ci, Sprites.WRENCH, pos + Vector2(4, 2 + sin(t * 8.0) * 2.0))
-	var strip := Rect2(px(0, H - 12), Vector2(W, 12))
-	ci.draw_rect(strip, Color(0, 0, 0, 0.8))
-	Theme2.text(ci, px(4, H - 3), status, Theme2.AMBER, 12)
-	if fmod(t * 2.0, 1.0) < 0.7:
-		Theme2.label(ci, px(W - 4, H - 4), "WEAPONS HOLD", Theme2.RED, 8, 2)
-	return_btn = Rect2(px(W - 92, 4), Vector2(88, 14))
-	if mech.pilot == Rules.PilotState.WORKING:
-		Theme2.button(ci, return_btn, "RETURN TO CHAIR", Theme2.GREEN, true, true)
-	Theme2.scanlines(ci, Rect2(origin, Vector2(W, H)), 0.09)

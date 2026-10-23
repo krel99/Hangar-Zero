@@ -104,6 +104,13 @@ func _run() -> void:
 	# Hull tap moves the repair drones
 	await tap(to_win.call(Vector2(4 + 20 * 2, 92 + 20 * 2)))  # reactor
 	check(sim.mech.repair_target == Rules.Section.REACTOR, "hull tap sends drones to the reactor")
+	# PURGE station clears boarders
+	var bd := Entities.Boarder.new()
+	bd.section = Rules.Section.COOLANT
+	sim.boarders.append(bd)
+	await process_frame
+	await tap(to_win.call(Vector2(444, 6.5 * 36)))
+	check(sim.boarders.is_empty() and sim.mech.purge_cd > 0.0, "tap on PURGE fries the boarder")
 	# Pause and resume
 	await tap(to_win.call(Vector2(444, 261)))
 	check(sim.mission.paused, "PAUSE button pauses")

@@ -64,5 +64,32 @@ func _init() -> void:
 	check(Rules.camera_for(0.0) == 0 and Rules.camera_for(PI / 2.0) == 1 and Rules.camera_for(PI) == 2 and Rules.camera_for(-PI / 2.0) == 3, "quadrants map to cameras")
 	check(not m.camera_ok(3) and m.cameras_up() == 3, "op 1 starts with the LEFT camera dead")
 
+	print("== boarders: purge and drones")
+	var bs := Sim.new(Campaign.new(), 11)
+	bs.mission.briefing = false
+	for sec in [Rules.Section.COOLANT, Rules.Section.COOLANT, Rules.Section.RAILGUN]:
+		var b := Entities.Boarder.new()
+		b.section = sec
+		bs.boarders.append(b)
+	bs.mech.repair_target = Rules.Section.COOLANT
+	var hp0: float = bs.mech.hp[Rules.Section.COOLANT]
+	for i in 200:
+		bs.step(0.05)
+	check(bs.boarders.size() <= 2 and bs.boarders.size() > 0, "drones on the boarded section pry ticks off, one at a time (%d left after 10 s)" % bs.boarders.size())
+	check(bs.mech.hp[Rules.Section.COOLANT] < hp0, "the section still took damage meanwhile")
+	var heat0 := bs.mech.heat
+	bs.cmd_purge = true
+	bs.step(0.05)
+	check(bs.boarders.is_empty(), "PURGE fries every boarder")
+	check(bs.mech.heat > heat0 + Rules.PURGE_HEAT * 0.9, "PURGE costs heat")
+	check(bs.mech.purge_cd > 0.0, "PURGE has a cooldown")
+	bs.cmd_purge = true
+	bs.step(0.05)
+	check(absf(bs.mech.heat - heat0 - Rules.PURGE_HEAT) < 2.0, "a second PURGE on cooldown does nothing")
+	bs.mech.repair_target = Rules.Section.SENSORS
+	for i in 400:
+		bs.step(0.05)
+	check(bs.mech.camera_ok(3), "drones at the sensor head rewire the LEFT camera (%.0f)" % bs.mech.cameras[3])
+
 	print(("ALL PASSED" if failures == 0 else "%d FAILURES" % failures))
 	quit(0 if failures == 0 else 1)

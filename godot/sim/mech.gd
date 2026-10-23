@@ -1,5 +1,5 @@
 ## The walking fortress: ten sections with their own integrity, the reactor bus, heat,
-## shields, cameras and where the pilot is.
+## shields and cameras.
 class_name Mech
 extends RefCounted
 
@@ -28,10 +28,11 @@ var overload := -1.0
 ## Seconds left before the interlocks fail, or -1 when the cockpit is sealed.
 var breach := -1.0
 var interlocks_failed := false
-var pilot: int = Rules.PilotState.SEAT
-var pilot_at: int = Rules.Section.COCKPIT
-var pilot_t := 0.0
-var pilot_dur := 1.0
+var purge_cd := 0.0
+## Flash on the hull diagram after a purge.
+var purge_t := 0.0
+## Drone work done on the boarder at the repair target.
+var fight_work := 0.0
 var sweep := 0.0
 var ac_firing := false
 var ac_burst_t := 0.0
@@ -92,10 +93,6 @@ func cameras_up() -> int:
 
 func uplink() -> float:
 	return hp[Rules.Section.UPLINK]
-
-
-func in_seat() -> bool:
-	return pilot == Rules.PilotState.SEAT
 
 
 func damage(s: int, amount: float) -> void:
