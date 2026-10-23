@@ -1,2 +1,5 @@
 /target
 /docs/play_*.png
+/docs/godot/play_*.png
+/godot/.godot/
+/godot/android/

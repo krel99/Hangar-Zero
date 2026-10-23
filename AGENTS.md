@@ -1,7 +1,48 @@
 # Notes for agents working on Hangar Zero
 
-Bevy 0.20 + bevy_egui 0.43, Rust 2024. The whole game is egui painted by hand; there are no
-image assets (sprites are text grids in `src/art.rs`, backdrops are generated at startup).
+Two implementations live here. `godot/` is the **Godot 4.7 port for Android** (the one being
+developed); `src/` is the original **Bevy 0.20 + bevy_egui** desktop prototype, kept as the
+reference for rules and art. Both paint everything by hand: no image assets, sprites are text
+grids, backdrops are generated at startup.
+
+## Godot port (`godot/`)
+
+```sh
+godot --headless --path godot --import                       # once after a pull: class_name index
+godot --headless --path godot -s tests/test_sim.gd           # rules; 4 seeded autopilot ops must win
+godot --headless --path godot -s tests/test_art.gd           # sprite/backdrop bake
+xvfb-run -a -s "-screen 0 1440x810x24" godot --path godot --rendering-driver opengl3 -s tests/test_ui.gd
+                                                             # synthetic touches/keys through main.tscn
+./scripts/godot-shots.sh [scene]                             # staged scenes -> docs/godot/*.png
+HZ_SCENE=play HZ_SHOT=out/play.png HZ_FRAMES=8 HZ_EVERY=40 HZ_SEED=7 \
+  xvfb-run -a -s "-screen 0 1440x810x24" godot --path godot --rendering-driver opengl3
+                                                             # autopilot strip; tile with scripts/strip.py
+```
+
+The `godot` binary is the stock Linux editor build (4.7.1); rendering under Xvfb uses Mesa
+llvmpipe through the GL Compatibility renderer and takes ~10 s per scene. `play` steps the sim
+headlessly between captures, so a whole op renders in under a minute.
+
+Layout (`ui/cockpit.gd`), designed at **480x270** and integer-scaled (`viewport` stretch):
+radar 88x88 and the 2x hull diagram with heat/shield/core readouts down the left; the 320x208
+camera feed (`ui/feed.gd`) in the middle with the uplink bar and a three-line radio under it;
+seven 72x36 stations and PAUSE down the right. `mech.view` is a continuous bearing: drag on
+the feed, gyro yaw (`Input.get_gyroscope()` about the gravity axis, untestable here), or
+TAB/arrows snapping to camera bearings. `ui/hangar.gd` is the between-ops screen; `ui/main.gd`
+owns the campaign, the sim and the screenshot plan; `ui/shots.gd` stages the scenes.
+
+- `sim/` is a line-for-line port of `src/sim.rs` + `campaign.rs` (`rules.gd` holds the enums
+  and constants). Keep the two in step when touching balance, or note the divergence.
+- `art/sprites.gd` holds the grids, `art/pixel.gd` bakes them to cached textures,
+  `art/hull.gd` the section map + detail overlay, `art/city.gd` the panorama and hangar.
+- GDScript gotchas met so far: `var x := [a, b][i]` fails to parse (type cannot be inferred;
+  annotate), a `-s` script that errors before `quit()` hangs silently (use a load-checker that
+  prints `load(path)` results), do not name methods `get`/`_set`, fonts must come from the
+  imported `.ttf` (a runtime `FontFile` renders as blobs under llvmpipe), and VT323 is only
+  legible at size 12+ on the 480x270 canvas (`Theme2.text` defaults to 12, `pix` labels to 8).
+- Keep `docs/godot/*.png` regenerated when the UI changes and **look at them**.
+
+## Desktop prototype (`src/`)
 
 ## Build, test, look
 

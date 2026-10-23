@@ -14,6 +14,35 @@ or cut power and sit still while the scouts close in.
 
 ![Camera wall](docs/quad.png)
 
+## Android build (Godot 4)
+
+The game is being moved to phones. `godot/` is a **Godot 4.7** port of the whole thing
+(GDScript, no plugins): the same rules, the same hand-drawn art, laid out for a landscape phone
+at a pixel-perfect 480x270 that the engine scales by whole numbers.
+
+![Godot cockpit](docs/godot/combat.png)
+
+![Godot hangar](docs/godot/hangar.png)
+
+- **Look around** by dragging the camera feed or turning the phone (gyroscope yaw); TAB /
+  arrow keys snap between the four hull cameras on a keyboard.
+- **Tap** a radar blip or a contact in the feed to target it, a hull section to send the
+  repair drones there, a station on the right to use it. Keys 1-7, SPACE, V, X, E, T, P still
+  work.
+- Everything else is as below: three enemies, the uplink encounter, the reactor overload, the
+  hangar with five salvage choices and the energy matrix.
+
+```sh
+godot --path godot                                        # run on the desktop (any size window)
+godot --headless --path godot --import                    # first time: build the script index
+godot --headless --path godot -s tests/test_sim.gd        # rules + 4 seeded autopilot ops
+./scripts/godot-shots.sh                                  # staged scenes -> docs/godot/*.png
+```
+
+`godot/export_presets.cfg` has an arm64 Android preset; open the project in the editor with the
+Android export templates installed and *Project > Export*. The Bevy prototype below stays as
+the desktop reference.
+
 ## What's in the prototype
 
 | Spec item | Where it is |
