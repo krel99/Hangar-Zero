@@ -379,7 +379,7 @@ func _weapons(dt: float) -> void:
 
 	# Railgun
 	mech.rail_charge = minf(mech.rail_charge + st.rail_rate * dt, 1.0)
-	var fire := cmd_fire_rail or mech.rail_auto
+	var fire := cmd_fire_rail
 	cmd_fire_rail = false
 	if fire and mech.rail_charge >= 1.0:
 		var e := target()

@@ -45,6 +45,7 @@ var _dragged := 0.0
 var _down_station := -1
 var _modal_btn := Rect2()
 var _gyro_btn := Rect2()
+var _modal_btn2 := Rect2()
 var _station_rects: Array[Rect2] = []
 var _hull_centroid: Array[Vector2] = []
 ## The hull body is baked into a small image a dozen times a second instead of ~4000
@@ -62,6 +63,9 @@ var _last_kills := 0
 var _last_overload := false
 ## Settings (persisted in user://settings.cfg).
 static var gyro_enabled := true
+## First-op hints: 0 swipe, 1 tap a contact, 2 fire the rail, 3 done.
+static var hint_stage := 3
+var _hint_turned := 0.0
 
 
 func _init() -> void:
@@ -76,11 +80,15 @@ static func load_settings() -> void:
 	var cf := ConfigFile.new()
 	if cf.load("user://settings.cfg") == OK:
 		gyro_enabled = cf.get_value("input", "gyro", true)
+		hint_stage = cf.get_value("help", "stage", 0)
+	else:
+		hint_stage = 0
 
 
 static func save_settings() -> void:
 	var cf := ConfigFile.new()
 	cf.set_value("input", "gyro", gyro_enabled)
+	cf.set_value("help", "stage", hint_stage)
 	cf.save("user://settings.cfg")
 
 
@@ -219,6 +227,7 @@ func update(dt: float) -> void:
 		return
 	if gyro_enabled and absf(gyro_rate) > 0.02:
 		mech.view = fposmod(mech.view + gyro_rate * dt, TAU)
+		_hint_turned += absf(gyro_rate * dt)
 		_still_t = 0.0
 		_snap = -1.0
 	elif not _press_in_feed:
@@ -259,6 +268,7 @@ func draw(ci: CanvasItem, now: float) -> void:
 	_radar(ci)
 	_hull(ci)
 	feed.draw(ci, now)
+	_hints(ci)
 	_uplink(ci)
 	_radio(ci)
 	_stations(ci)
@@ -494,6 +504,54 @@ func hull_section_at(p: Vector2) -> int:
 	return v if v < Rules.SECTIONS else -1
 
 
+func _hint_done() -> void:
+	hint_stage += 1
+	save_settings()
+
+
+func _hints(ci: CanvasItem) -> void:
+	if hint_stage >= 3 or sim.mission.number != 1 or not sim.mission.running():
+		return
+	var mech := sim.mech
+	var msg := ""
+	match hint_stage:
+		0:
+			if _hint_turned > 0.6:
+				_hint_done()
+				return
+			msg = "SWIPE TO LOOK AROUND" if Theme2.touch else "DRAG TO LOOK AROUND"
+		1:
+			if mech.target >= 0:
+				_hint_done()
+				return
+			var any := false
+			for e in sim.enemies:
+				if e.covered and not is_nan(feed.to_x(e.angle, mech.view)):
+					any = true
+			if not any:
+				return
+			msg = "TAP A CONTACT TO TARGET IT"
+		2:
+			if mech.kills > 0 or mech.rail_charge < 0.3:
+				_hint_done()
+				return
+			if mech.rail_charge < 1.0 or mech.target < 0:
+				return
+			msg = "TAP IT AGAIN, OR RAIL, TO FIRE"
+	if msg == "":
+		return
+	var y := FEED_POS.y + Feed.H - 34.0
+	var w := Theme2.pix.get_string_size(msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x + 16.0
+	var r := Rect2(FEED_POS.x + Feed.W / 2.0 - w / 2.0, y, w, 14)
+	ci.draw_rect(r, Color(0, 0, 0, 0.75))
+	ci.draw_rect(r, Color(Theme2.AMBER, 0.5 + 0.5 * Theme2.pulse(t, 1.2)), false, 1.0)
+	Theme2.label(ci, Vector2(r.get_center().x, y + 10), msg, Theme2.AMBER, 8, 1)
+	if hint_stage == 0:
+		var k := 3.0 * sin(t * 4.0)
+		ci.draw_colored_polygon(PackedVector2Array([Vector2(r.position.x - 10 + k, y + 7), Vector2(r.position.x - 4 + k, y + 3), Vector2(r.position.x - 4 + k, y + 11)]), Theme2.AMBER)
+		ci.draw_colored_polygon(PackedVector2Array([Vector2(r.end.x + 10 - k, y + 7), Vector2(r.end.x + 4 - k, y + 3), Vector2(r.end.x + 4 - k, y + 11)]), Theme2.AMBER)
+
+
 # ---------------------------------------------------------------------------------------
 # Uplink and radio, under the feed
 # ---------------------------------------------------------------------------------------
@@ -660,6 +718,7 @@ func _modals(ci: CanvasItem) -> void:
 	var mech := sim.mech
 	_modal_btn = Rect2()
 	_gyro_btn = Rect2()
+	_modal_btn2 = Rect2()
 	if mission.briefing:
 		var r := _modal_frame(ci, Vector2(440, 200), Theme2.AMBER)
 		Theme2.label(ci, r.position + Vector2(10, 16), "OPERATION %02d // BRIEFING" % mission.number, Theme2.AMBER, 8)
@@ -668,6 +727,9 @@ func _modals(ci: CanvasItem) -> void:
 		Pixel.draw(ci, Sprites.FACE_CONTROL, face.position + Vector2(4, 4))
 		Theme2.scanlines(ci, face, 0.2)
 		var lines := [
+			["CONTROL", Theme2.CYAN, "Op %02d. The uplink's dark again. Same job: hold until the drones bring it up." % mission.number],
+			["ODA", Theme2.AMBER, "She's carrying scars now. Watch what lights up on the hull."],
+		] if mission.number > 1 else [
 			["CONTROL", Theme2.CYAN, "The uplink on your mast is down. Without it the shield grid stays dark tonight."],
 			["ODA", Theme2.AMBER, "Hold position; the drones rebuild the uplink. Your LEFT camera is dead: anything west is radar-only, wider error, worse shots."],
 			["ODA", Theme2.AMBER, "Every shot heats the core. Past 100, containment goes in 12 seconds. VENT dumps heat but drops shields; SCRAM kills everything for 6."],
@@ -719,8 +781,14 @@ func _modals(ci: CanvasItem) -> void:
 			Theme2.text(ci, Vector2(r.position.x + 120, y), s[0], Theme2.DIM, 12)
 			Theme2.text(ci, Vector2(r.end.x - 16, y), s[1], Theme2.TEXT, 12, 2)
 			y += 14.0
-		_modal_btn = Rect2(r.position.x + 120, r.end.y - 26, r.size.x - 136, 16)
-		Theme2.button(ci, _modal_btn, "RETURN TO HANGAR" if victory else "NEW CAMPAIGN", col, true, true)
+		if victory:
+			_modal_btn = Rect2(r.position.x + 120, r.end.y - 26, r.size.x - 136, 16)
+			Theme2.button(ci, _modal_btn, "RETURN TO HANGAR", col, true, true)
+		else:
+			_modal_btn = Rect2(r.position.x + 120, r.end.y - 26, 108, 16)
+			Theme2.button(ci, _modal_btn, "RETRY OP %02d" % mission.number, Theme2.AMBER, true, true)
+			_modal_btn2 = Rect2(r.end.x - 124, r.end.y - 26, 108, 16)
+			Theme2.button(ci, _modal_btn2, "NEW CAMPAIGN", col, true, false)
 		return
 	if mission.paused:
 		var r := _modal_frame(ci, Vector2(300, 170), Theme2.DIM)
@@ -758,12 +826,15 @@ func _modal_tap(p: Vector2) -> void:
 		gyro_enabled = not gyro_enabled
 		save_settings()
 		return
+	if mission.outcome != Rules.Outcome.NONE and _modal_btn2.has_point(p):
+		request = "new_campaign"
+		return
 	if not _modal_btn.has_point(p):
 		return
 	if mission.briefing:
 		mission.briefing = false
 	elif mission.outcome != Rules.Outcome.NONE:
-		request = "hangar" if mission.outcome == Rules.Outcome.VICTORY else "new_campaign"
+		request = "hangar" if mission.outcome == Rules.Outcome.VICTORY else "retry"
 	elif mission.paused:
 		mission.paused = false
 
@@ -792,6 +863,7 @@ func drag(p: Vector2, rel: Vector2) -> void:
 	_dragged += rel.length()
 	if _press_in_feed and sim.mission.running():
 		_drag_dx += rel.x
+		_hint_turned += absf(rel.x) / Feed.W * Rules.CAMERA_FOV
 		_snap = -1.0
 		_still_t = 0.0
 		sim.mech.view = fposmod(sim.mech.view - rel.x / Feed.W * Rules.CAMERA_FOV, TAU)
@@ -869,7 +941,11 @@ func _pick_in_feed(p: Vector2) -> void:
 		if d < best_d:
 			best_d = d
 			best = e.id
-	if best >= 0:
+	if best < 0:
+		return
+	if best == mech.target and _slots()[0][5]:
+		_station(0)  # a second tap on the locked contact fires the rail
+	else:
 		mech.target = best
 
 
@@ -894,6 +970,7 @@ func turn_camera(step: int) -> void:
 	var cam := (Rules.camera_for(mech.view) + step + Rules.CAMERAS) % Rules.CAMERAS
 	_snap = Rules.camera_bearing(cam)
 	_still_t = 0.0
+	_hint_turned += 1.0
 
 
 func key(keycode: int, shift: bool) -> void:

@@ -108,6 +108,17 @@ func _run() -> void:
 	var blip := Vector2(44, 44) + Vector2(sin(e.angle), -cos(e.angle)) * (e.dist * 35.0 / Rules.RADAR_SCALE_M)
 	await tap(to_win.call(blip))
 	check(sim.mech.target == e.id, "radar tap selects the contact")
+	# A second tap on the locked contact fires the rail
+	var e2 := sim.spawn_enemy(Rules.Kind.ARTILLERY, sim.mech.view, 300.0)
+	e2.covered = true
+	sim.mech.rail_charge = 1.0
+	sim.mech.heat = 30.0
+	await process_frame
+	var fx: Vector2 = to_win.call(Vector2(88 + 160, 120))
+	await tap(fx)
+	check(sim.mech.target == e2.id, "feed tap locks the contact in view")
+	await tap(fx)
+	check(sim.mech.rail_charge < 0.5, "second tap on the contact fires the rail (charge %.2f)" % sim.mech.rail_charge)
 	# Hull tap moves the repair drones
 	await tap(to_win.call(Vector2(4 + 20 * 2, 92 + 20 * 2)))  # reactor
 	check(sim.mech.repair_target == Rules.Section.REACTOR, "hull tap sends drones to the reactor")
@@ -148,6 +159,14 @@ func _run() -> void:
 	await tap(to_win.call(HangarView.DEPLOY_BTN.get_center()))
 	check(main.screen == 0 and main.sim != sim, "deploy starts op 2")
 	check(main.sim.mission.number == 2, "op 2 mission number")
+	# Defeat offers a retry of the same op
+	var s2: Sim = main.sim
+	s2.mission.briefing = false
+	s2.mission.outcome = Rules.Outcome.MELTDOWN
+	await process_frame
+	await process_frame
+	await tap(to_win.call(Vector2(234, 212)))  # RETRY OP
+	check(main.screen == 0 and main.sim != s2 and main.sim.mission.number == 2, "RETRY replays op 2 with the same campaign")
 	if fails == 0:
 		printerr("ALL PASSED")
 	else:

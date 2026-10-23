@@ -20,7 +20,7 @@ const YELLOW := Color8(242, 200, 74)
 const SHIELD := Color8(110, 150, 255)
 
 ## True on phones and tablets: keyboard tags and key hints are hidden.
-static var touch: bool = DisplayServer.is_touchscreen_available() or OS.has_feature("mobile")
+static var touch: bool = OS.has_feature("mobile")
 
 static var pix: Font = load("res://fonts/Silkscreen-Regular.ttf")
 static var mono: Font = load("res://fonts/VT323-Regular.ttf")

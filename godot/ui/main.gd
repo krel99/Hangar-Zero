@@ -12,6 +12,8 @@ var screen: int = Screen.COCKPIT
 var cockpit := Cockpit.new()
 var hangar := HangarView.new()
 var t := 0.0
+## Where the 480x270 layout sits inside a wider or taller canvas (20:9 phones, tablets).
+var _off := Vector2.ZERO
 
 ## Screenshot plan from the environment; empty scene = normal play.
 var shot_scene := OS.get_environment("HZ_SCENE")
@@ -86,10 +88,36 @@ func _process(dt: float) -> void:
 				_to_hangar()
 			elif cockpit.request == "new_campaign":
 				_new_campaign()
+			elif cockpit.request == "retry":
+				_deploy()
 		Screen.HANGAR:
 			if hangar.request == "deploy":
 				_deploy()
 	queue_redraw()
+
+
+## The margins a wide or tall screen leaves around the layout: riveted console housing.
+func _bezel(vs: Vector2) -> void:
+	draw_rect(Rect2(Vector2.ZERO, vs), Theme2.BG)
+	var strips: Array[Rect2] = []
+	if _off.x > 0.0:
+		strips.append(Rect2(0, 0, _off.x, vs.y))
+		strips.append(Rect2(vs.x - _off.x, 0, _off.x, vs.y))
+	if _off.y > 0.0:
+		strips.append(Rect2(0, 0, vs.x, _off.y))
+		strips.append(Rect2(0, vs.y - _off.y, vs.x, _off.y))
+	for r in strips:
+		draw_rect(r, Theme2.PANEL_DARK)
+		var y := r.position.y + 6.0
+		while y < r.end.y - 4.0:
+			var x := r.position.x + 6.0
+			while x < r.end.x - 4.0:
+				draw_rect(Rect2(x, y, 2, 2), Theme2.EDGE_HI)
+				draw_rect(Rect2(x + 1, y + 1, 1, 1), Theme2.EDGE_LO)
+				x += 24.0
+			y += 24.0
+	# A dark lip around the screen itself
+	draw_rect(Rect2(_off - Vector2(2, 2), Vector2(484, 274)), Theme2.EDGE_LO, false, 2.0)
 
 
 ## Rotation rate about the gravity axis: turning the phone left or right, however it is
@@ -104,6 +132,11 @@ func _gyro_yaw() -> float:
 func _draw() -> void:
 	if sim == null and screen == Screen.COCKPIT:
 		return
+	var vs := get_viewport_rect().size
+	_off = ((vs - Vector2(480, 270)) / 2.0).floor()
+	if _off != Vector2.ZERO:
+		_bezel(vs)
+	draw_set_transform(_off)
 	match screen:
 		Screen.COCKPIT:
 			cockpit.draw(self, t)
@@ -115,17 +148,18 @@ func _input(event: InputEvent) -> void:
 	if _shooting:
 		return
 	if event is InputEventScreenTouch:
+		var p: Vector2 = event.position - _off
 		if event.pressed:
 			if screen == Screen.COCKPIT:
-				cockpit.press(event.position)
+				cockpit.press(p)
 		else:
 			if screen == Screen.COCKPIT:
-				cockpit.release(event.position)
+				cockpit.release(p)
 			else:
-				hangar.tap(event.position)
+				hangar.tap(p)
 	elif event is InputEventScreenDrag:
 		if screen == Screen.COCKPIT:
-			cockpit.drag(event.position, event.relative)
+			cockpit.drag(event.position - _off, event.relative)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if screen == Screen.COCKPIT:
 			cockpit.key(event.keycode, event.shift_pressed)

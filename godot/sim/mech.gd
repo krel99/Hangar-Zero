@@ -11,7 +11,6 @@ var heat_peak := 22.0
 var shield := 30.0
 var shield_hit_t := 0.0
 var rail_charge := 0.4
-var rail_auto := false
 var weapons_free := true
 var point_defence := true
 ## Enemy id (see Sim.enemies), or -1.
@@ -45,7 +44,6 @@ var hit_t: Array[float] = []
 var cams_at_start := 0
 ## Continuous view bearing (the phone turns it); cameras are the arcs that still see.
 var view := 0.0
-var quad_view := false
 
 ## Derived numbers, refreshed every step (see Sim.derive).
 var st := {}
