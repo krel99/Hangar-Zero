@@ -24,11 +24,17 @@ at a pixel-perfect 480x270 that the engine scales by whole numbers.
 
 ![Godot hangar](docs/godot/hangar.png)
 
-- **Look around** by dragging the camera feed or turning the phone (gyroscope yaw); TAB /
-  arrow keys snap between the four hull cameras on a keyboard.
-- **Tap** a radar blip or a contact in the feed to target it, a hull section to send the
-  repair drones there, a station on the right to use it. Keys 1-7, SPACE, V, X, E, T, P still
-  work.
+- **Look around** by swiping the camera feed or turning the phone (gyroscope yaw). The view
+  settles on whole cameras, a flick jumps to the next one, and arcs with a dead camera show
+  static behind a bezel edge. TAB / arrow keys do the same on a keyboard.
+- **Tap** a radar blip or a contact in the feed to target it, and tap the locked contact
+  again to fire the rail. Tap a hull section (or the uplink bar) to send the repair drones
+  there, a station on the right to use it. EJECT appears on the overload banner only.
+  Keys 1-6, SPACE, V, X, E, T, P still work.
+- **Phone manners**: the app pauses when it loses focus, the back button pauses, the
+  campaign is saved between operations and resumes in the hangar, a lost op can be retried,
+  wide (20:9) screens get a riveted bezel, short buzzes mark shots and hits (toggle in the
+  pause menu, with the gyro), and the first op shows three one-line hints.
 - **No crawling through the hull.** The phone version drops the interior and the pilot
   leaving the chair. Boarders are fried by the **PURGE** station (electrify the plating,
   +16 heat, 20 s cooldown) or pried off by the repair drones when you send them to the boarded

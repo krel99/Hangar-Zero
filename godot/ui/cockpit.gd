@@ -45,6 +45,7 @@ var _dragged := 0.0
 var _down_station := -1
 var _modal_btn := Rect2()
 var _gyro_btn := Rect2()
+var _buzz_btn := Rect2()
 var _modal_btn2 := Rect2()
 var _station_rects: Array[Rect2] = []
 var _hull_centroid: Array[Vector2] = []
@@ -66,6 +67,10 @@ static var gyro_enabled := true
 ## First-op hints: 0 swipe, 1 tap a contact, 2 fire the rail, 3 done.
 static var hint_stage := 3
 var _hint_turned := 0.0
+## Tap ripples: [position, time].
+var _taps: Array = []
+var _sect_flash := 0.0
+static var haptics_enabled := true
 
 
 func _init() -> void:
@@ -80,6 +85,7 @@ static func load_settings() -> void:
 	var cf := ConfigFile.new()
 	if cf.load("user://settings.cfg") == OK:
 		gyro_enabled = cf.get_value("input", "gyro", true)
+		haptics_enabled = cf.get_value("input", "haptics", true)
 		hint_stage = cf.get_value("help", "stage", 0)
 	else:
 		hint_stage = 0
@@ -88,6 +94,7 @@ static func load_settings() -> void:
 static func save_settings() -> void:
 	var cf := ConfigFile.new()
 	cf.set_value("input", "gyro", gyro_enabled)
+	cf.set_value("input", "haptics", haptics_enabled)
 	cf.set_value("help", "stage", hint_stage)
 	cf.save("user://settings.cfg")
 
@@ -250,6 +257,11 @@ func update(dt: float) -> void:
 ## Short buzzes for the things the pilot would feel: a rail shot, a shell, a kill, the
 ## overload alarm. No-op without a vibrator.
 func _haptics(mech: Mech) -> void:
+	if not haptics_enabled:
+		_last_shake = mech.shake
+		_last_kills = mech.kills
+		_last_overload = mech.overload >= 0.0
+		return
 	if mech.shake > _last_shake + 0.3:
 		Input.vibrate_handheld(70 if mech.shake > 1.2 else 30)
 	_last_shake = mech.shake
@@ -273,6 +285,7 @@ func draw(ci: CanvasItem, now: float) -> void:
 	_radio(ci)
 	_stations(ci)
 	Theme2.button(ci, PAUSE_BTN, "PAUSE", Theme2.DIM, true, false)
+	_ripples(ci)
 	_modals(ci)
 
 
@@ -443,13 +456,14 @@ func _hull(ci: CanvasItem) -> void:
 		_hull_bake(boarders_on)
 		_hull_next = t + 0.08
 	ci.draw_texture_rect(_hull_tex, Rect2(HULL_ORIGIN - Vector2(HULL_PAD, HULL_PAD) * HULL_K, Vector2(_hull_img.get_width(), _hull_img.get_height()) * HULL_K), false)
-	# Repair drones: blinking outline on their target
+	# Repair drones: blinking outline on their target (solid white just after a tap)
 	var rt := mech.repair_target
-	if fmod(t * 2.0, 1.0) < 0.6:
+	_sect_flash = maxf(_sect_flash - 0.016, 0.0)
+	if fmod(t * 2.0, 1.0) < 0.6 or _sect_flash > 0.0:
 		for y in Hull.H:
 			for x in Hull.W:
 				if Hull.at(x, y) == rt and _edge[y * Hull.W + x] == 1:
-					ci.draw_rect(_cell(x, y), Color8(240, 130, 60), false, 1.0)
+					ci.draw_rect(_cell(x, y), Color.WHITE if _sect_flash > 0.0 else Color8(240, 130, 60), false, 1.0)
 	# Boarders and incoming shells
 	for s in Rules.SECTIONS:
 		var n: int = boarders_on[s]
@@ -502,6 +516,21 @@ func hull_section_at(p: Vector2) -> int:
 	var g := ((p - HULL_ORIGIN) / HULL_K).floor()
 	var v := Hull.at(int(g.x), int(g.y))
 	return v if v < Rules.SECTIONS else -1
+
+
+func _ripple(p: Vector2) -> void:
+	_taps.append([p, t])
+
+
+func _ripples(ci: CanvasItem) -> void:
+	var keep: Array = []
+	for tp in _taps:
+		var age: float = t - tp[1]
+		if age > 0.35:
+			continue
+		keep.append(tp)
+		Theme2.ring(ci, tp[0], 2.0 + age * 30.0, Color(1, 1, 1, 1.0 - age / 0.35))
+	_taps = keep
 
 
 func _hint_done() -> void:
@@ -619,11 +648,7 @@ func _slots() -> Array:
 	var rail_ready: bool = mech.rail_charge >= 1.0 and not rail_dead
 	var lock: bool = target != null and target.dist <= st.radar_range
 	var radar_only: bool = target != null and not target.covered
-	var hitp := 0.92 * (0.5 + 0.5 * mech.eff(Rules.Section.SENSORS))
-	if target:
-		if target.kind == Rules.Kind.SCOUT:
-			hitp -= 0.15
-		hitp *= target.aim_factor()
+	var hitp := sim.hit_chance(target) if target else 0.0
 	var rail: Array
 	if rail_dead:
 		rail = ["DESTROYED", Theme2.RED]
@@ -718,6 +743,7 @@ func _modals(ci: CanvasItem) -> void:
 	var mech := sim.mech
 	_modal_btn = Rect2()
 	_gyro_btn = Rect2()
+	_buzz_btn = Rect2()
 	_modal_btn2 = Rect2()
 	if mission.briefing:
 		var r := _modal_frame(ci, Vector2(440, 200), Theme2.AMBER)
@@ -814,9 +840,11 @@ func _modals(ci: CanvasItem) -> void:
 			Theme2.text(ci, Vector2(r.position.x + 70, y), h[0], Theme2.AMBER, 12, 2)
 			Theme2.text(ci, Vector2(r.position.x + 78, y), h[1], Theme2.TEXT, 12)
 			y += 14.0
-		_gyro_btn = Rect2(r.position.x + 16, r.end.y - 26, 96, 18)
+		_gyro_btn = Rect2(r.position.x + 10, r.end.y - 26, 88, 18)
 		Theme2.button(ci, _gyro_btn, "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Theme2.CYAN, true, gyro_enabled)
-		_modal_btn = Rect2(r.end.x - 112, r.end.y - 26, 96, 18)
+		_buzz_btn = Rect2(r.position.x + 106, r.end.y - 26, 88, 18)
+		Theme2.button(ci, _buzz_btn, "BUZZ %s" % ("ON" if haptics_enabled else "OFF"), Theme2.CYAN, true, haptics_enabled)
+		_modal_btn = Rect2(r.end.x - 98, r.end.y - 26, 88, 18)
 		Theme2.button(ci, _modal_btn, "RESUME", Theme2.AMBER, true, true)
 
 
@@ -824,6 +852,10 @@ func _modal_tap(p: Vector2) -> void:
 	var mission := sim.mission
 	if mission.paused and _gyro_btn.has_point(p):
 		gyro_enabled = not gyro_enabled
+		save_settings()
+		return
+	if mission.paused and _buzz_btn.has_point(p):
+		haptics_enabled = not haptics_enabled
 		save_settings()
 		return
 	if mission.outcome != Rules.Outcome.NONE and _modal_btn2.has_point(p):
@@ -895,14 +927,21 @@ func release(p: Vector2) -> void:
 		return
 	var mech := sim.mech
 	if RADAR.has_point(p):
+		_ripple(p)
 		_pick_blip(p)
 	elif HULL_BOX.has_point(p):
 		var s := hull_section_at(p)
 		if s >= 0:
 			mech.repair_target = s
+			_sect_flash = 0.4
+	elif UPLINK_BAR.grow(4).has_point(p) or Rect2(340, 206, 68, 14).has_point(p):
+		# Loop 22: the mast is a sliver on the diagram; the uplink bar is the easy target.
+		mech.repair_target = Rules.Section.UPLINK
+		_sect_flash = 0.4
 	elif feed.eject_btn.has_point(p):
 		sim.cmd_eject = true
 	elif Rect2(FEED_POS, Vector2(Feed.W, Feed.H)).has_point(p):
+		_ripple(p)
 		_pick_in_feed(p)
 
 

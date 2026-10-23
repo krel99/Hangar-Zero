@@ -23,6 +23,7 @@ var _shooting := false
 
 func _ready() -> void:
 	set_process_input(true)
+	City.ensure()  # bake the panoramas behind the splash, not on the first frame of play
 	if shot_scene != "":
 		_shooting = true
 		rng = Rng.new(int(OS.get_environment("HZ_SEED")) if OS.get_environment("HZ_SEED") != "" else 1987)
@@ -79,6 +80,7 @@ func _process(dt: float) -> void:
 	if _shooting:
 		queue_redraw()
 		return
+	Engine.max_fps = 60 if screen == Screen.COCKPIT and not cockpit.modal_open() else 30
 	match screen:
 		Screen.COCKPIT:
 			cockpit.gyro_rate = _gyro_yaw()
@@ -179,6 +181,7 @@ func _env_f(name: String, dflt: float) -> float:
 
 func _run_shots() -> void:
 	await get_tree().process_frame
+	Cockpit.hint_stage = 3
 	if shot_path == "":
 		shot_path = shot_scene + ".png"
 	if shot_scene == "play":
@@ -208,6 +211,8 @@ func _run_shots() -> void:
 		var steps := int(Shots.settle(shot_scene) * 60.0)
 		for i in steps:
 			sim.step(1.0 / 60.0)
+		if shot_scene == "pause":
+			sim.mission.paused = true
 	t = Shots.settle(shot_scene)
 	await _capture(shot_path)
 	print("captured ", shot_path)

@@ -10,7 +10,7 @@ const MECH_K := 2.0
 const CRADLE_Y := 112.0
 const CARDS := Rect2(4, 124, 472, 130)
 const CARD_GAP := 3.0
-const DEPLOY_BTN := Rect2(356, 256, 120, 12)
+const DEPLOY_BTN := Rect2(340, 255, 136, 14)
 
 var campaign: Campaign
 var chosen := -1
@@ -185,7 +185,7 @@ func _matrix(ci: CanvasItem) -> void:
 		var can_on := on or draw + cost <= output
 		var col := Theme2.sys_color(i)
 		var btn := Rect2(r.position.x + 6, y, 30, 10)
-		_matrix_btns.append(btn)
+		_matrix_btns.append(Rect2(r.position.x + 2, y - 1, r.size.x - 4, 12))  # the whole row toggles
 		Theme2.button(ci, btn, "WIRED" if on else "OFF", col, can_on, on)
 		Theme2.label(ci, Vector2(r.position.x + 40, y + 8), Rules.SYS_NAME[i], col if on else Theme2.DIM, 8)
 		Theme2.text(ci, Vector2(r.position.x + 70, y + 8), "%du" % int(cost), Theme2.TEXT if on else Theme2.DIM, 12)
@@ -222,8 +222,8 @@ func _cards(ci: CanvasItem) -> void:
 		y += Theme2.text_wrap(ci, Vector2(cr.position.x + 3, y), "+ " + info[3], cw - 6, Theme2.GREEN, 12, 2) + 2.0
 		y += Theme2.text_wrap(ci, Vector2(cr.position.x + 3, y), "- " + info[4], cw - 6, Color8(240, 120, 100), 12, 2)
 		if maker != Campaign.Maker.BASTION:
-			Theme2.text(ci, Vector2(cr.position.x + 3, cr.end.y - 16), "-11% ORIGINAL", Theme2.AMBER, 12)
-		var btn := Rect2(cr.position.x + 3, cr.end.y - 13, cw - 6, 11)
+			Theme2.text(ci, Vector2(cr.position.x + 3, cr.end.y - 19), "-11% ORIGINAL", Theme2.AMBER, 12)
+		var btn := Rect2(cr.position.x + 3, cr.end.y - 16, cw - 6, 14)
 		_install_btns.append(btn)
 		Theme2.button(ci, btn, "INSTALLED" if is_chosen else "INSTALL", accent, chosen < 0, is_chosen)
 

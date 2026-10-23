@@ -65,6 +65,14 @@ func target() -> Entities.Enemy:
 	return enemy_by_id(mech.target) if mech.target >= 0 else null
 
 
+## Chance a rail shot aimed at `e` connects, as the cockpit quotes it.
+func hit_chance(e: Entities.Enemy) -> float:
+	var p := 0.92 * (0.5 + 0.5 * mech.eff(Rules.Section.SENSORS))
+	if e.kind == Rules.Kind.SCOUT:
+		p -= 0.15
+	return clampf(p * e.aim_factor(), 0.0, 1.0)
+
+
 func add_fx(kind: int, angle: float, dist: float, ttl: float) -> void:
 	var f := Entities.Fx.new()
 	f.kind = kind
@@ -387,10 +395,7 @@ func _weapons(dt: float) -> void:
 			mech.rail_charge = 0.0
 			mech.heat += Rules.RAIL_HEAT + campaign.rail_heat
 			mech.shake = 1.0
-			var p := 0.92 * (0.5 + 0.5 * mech.eff(Rules.Section.SENSORS))
-			if e.kind == Rules.Kind.SCOUT:
-				p -= 0.15
-			p *= e.aim_factor()
+			var p := hit_chance(e)
 			# The shot goes where the radar says the target is.
 			add_fx(Rules.Fx.RAIL, e.est_angle, e.est_dist, 0.45)
 			if rng.chance(p):

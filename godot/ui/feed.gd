@@ -320,6 +320,24 @@ func _hud(ci: CanvasItem, view: float) -> void:
 		if d % 45 == 0:
 			var lbl: String = {0: "N", 90: "E", 180: "S", 270: "W"}.get(d, "%03d" % d)
 			Theme2.text(ci, px(x, 15), lbl, Theme2.GREEN, 12, 1)
+	# Target readout: who, how far, the odds
+	var tgt := sim.target()
+	if tgt and tgt.dist <= mech.st.radar_range:
+		var odds := sim.hit_chance(tgt)
+		var col := Theme2.GREEN if tgt.covered else Theme2.AMBER
+		Theme2.text(ci, px(6, 30), "%s  %dm" % [tgt.callsign(), int(tgt.est_dist)], col, 12)
+		Theme2.text(ci, px(6, 42), "%d%% %s" % [int(odds * 100.0), "HIT" if tgt.covered else "RADAR"], col, 12)
+	# Incoming artillery: where it comes from, what it will hit
+	if not sim.shells.is_empty() and fmod(t * 4.0, 1.0) < 0.6:
+		var sh: Entities.Shell = sim.shells[0]
+		var rel := Rules.angle_diff(sh.angle, view)
+		var arrow := "" if absf(rel) < FOV * 0.6 else ("  >" if rel > 0.0 else "<  ")
+		var txt := "INCOMING  %s" % Rules.SECTION_SHORT[sh.target]
+		if rel >= FOV * 0.6:
+			txt += arrow
+		elif rel <= -FOV * 0.6:
+			txt = arrow + txt
+		Theme2.text(ci, px(W - 6, 30), txt, Theme2.RED, 12, 2)
 	# Crosshair
 	var cc := px(W / 2.0, H * 0.5)
 	for seg in [[Vector2(-10, 0), Vector2(-4, 0)], [Vector2(4, 0), Vector2(10, 0)], [Vector2(0, -10), Vector2(0, -4)], [Vector2(0, 4), Vector2(0, 10)]]:

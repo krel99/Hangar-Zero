@@ -35,7 +35,14 @@ owns the campaign, the sim and the screenshot plan; `ui/shots.gd` stages the sce
   Known divergence: **no pilot EVA / interior** in Godot. Boarders are cleared by the PURGE
   station (`cmd_purge`, `PURGE_HEAT`, `PURGE_CD`) or by the repair drones when the repair
   target is the boarded section (`BOARDER_WORK`); drones at SENSORS rewire the worst camera.
-  Staged scenes are `briefing combat boarded overload hangar` (`ui/shots.gd`).
+  Staged scenes are `briefing combat boarded overload hangar` (`ui/shots.gd`), plus `pause`.
+- Phone behaviour lives in `ui/main.gd` (focus-loss pause, back button, `Campaign.save()` /
+  `load_saved()` to `user://campaign.json`, the centred layout + bezel for canvases wider than
+  480x270 via `_off`, 30 fps cap in menus) and `ui/cockpit.gd` (view settles on a camera after
+  0.45 s still, flick = next camera, `Input.vibrate_handheld` haptics, settings in
+  `user://settings.cfg`: gyro, haptics, first-op hint stage). `Theme2.touch` is true only on
+  the mobile export and hides keyboard tags. The hull body is baked into an `ImageTexture`
+  12x a second (`_hull_bake`), not drawn cell by cell.
 - `art/sprites.gd` holds the grids, `art/pixel.gd` bakes them to cached textures,
   `art/hull.gd` the section map + detail overlay, `art/city.gd` the panorama and hangar.
 - GDScript gotchas met so far: `var x := [a, b][i]` fails to parse (type cannot be inferred;
