@@ -26,10 +26,31 @@ func _ready() -> void:
 		rng = Rng.new(int(OS.get_environment("HZ_SEED")) if OS.get_environment("HZ_SEED") != "" else 1987)
 		_run_shots.call_deferred()
 		return
-	_deploy()
+	# A phone kills the app whenever it likes: resume in the hangar where the last op left off.
+	var saved := Campaign.load_saved()
+	if saved and saved.mission > 1:
+		campaign = saved
+		hangar.set_campaign(campaign)
+		screen = Screen.HANGAR
+	else:
+		_deploy()
+
+
+func _notification(what: int) -> void:
+	if _shooting or sim == null:
+		return
+	match what:
+		NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT, NOTIFICATION_APPLICATION_PAUSED:
+			if screen == Screen.COCKPIT and sim.mission.running():
+				sim.mission.paused = true
+		NOTIFICATION_WM_GO_BACK_REQUEST:
+			if screen == Screen.COCKPIT:
+				cockpit.key(KEY_ESCAPE, false)
 
 
 func _deploy() -> void:
+	if not _shooting and screen == Screen.HANGAR:
+		campaign.save()  # matrix and salvage choices made in the hangar
 	sim = Sim.new(campaign, rng.index(1 << 30))
 	cockpit.set_sim(sim)
 	screen = Screen.COCKPIT
@@ -42,9 +63,11 @@ func _to_hangar() -> void:
 	campaign.roll_salvage(rng)
 	hangar.set_campaign(campaign)
 	screen = Screen.HANGAR
+	campaign.save()
 
 
 func _new_campaign() -> void:
+	Campaign.clear_saved()
 	campaign = Campaign.new()
 	_deploy()
 

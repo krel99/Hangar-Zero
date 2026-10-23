@@ -10,6 +10,8 @@ const FOV := Rules.CAMERA_FOV
 var sim: Sim
 var origin := Vector2.ZERO
 var t := 0.0
+## Hit rect of the EJECT button while the reactor is overloading (empty otherwise).
+var eject_btn := Rect2()
 
 
 func set_sim(s: Sim) -> void:
@@ -290,6 +292,16 @@ func _dead_arcs(ci: CanvasItem, view: float) -> void:
 		for b in 3:
 			var band := (frame / 2 + b * 70) % int(H)
 			ci.draw_rect(Rect2(px(x0, band), Vector2(x1 - x0, 10)), Color(1, 1, 1, (10 + b * 4) / 255.0))
+		# The join with the live camera is a bezel edge, not a hard cut.
+		for edge in [x0, x1]:
+			if edge <= 0.5 or edge >= W - 0.5:
+				continue
+			var live_dir := 1.0 if edge == x1 else -1.0
+			for i in 8:
+				var a := (1.0 - i / 8.0) * 0.55
+				ci.draw_rect(Rect2(px(edge + live_dir * i - (0.0 if live_dir > 0 else 1.0), 0), Vector2(1, H)), Color(0, 0, 0, a))
+			ci.draw_rect(Rect2(px(edge - 1, 0), Vector2(2, H)), Color8(30, 32, 38))
+			ci.draw_rect(Rect2(px(edge - (1.0 if live_dir > 0 else 0.0), 0), Vector2(1, H)), Color8(70, 76, 86))
 		if x1 - x0 > 60.0 and fmod(t * 1.5, 1.0) < 0.7:
 			Theme2.label(ci, px((x0 + x1) / 2.0, H / 2.0), "NO SIGNAL", Theme2.RED, 8, 1)
 			Theme2.text(ci, px((x0 + x1) / 2.0, H / 2.0 + 12), "CAM %s DEAD" % Rules.CAMERA_NAMES[cam], Theme2.DIM, 12, 1)
@@ -341,9 +353,16 @@ func _hud(ci: CanvasItem, view: float) -> void:
 		ci.draw_rect(Rect2(px(h % int(W), (h >> 9) % int(H)), Vector2(2, 1)), Color(v, v, v))
 	if mech.heat > 85.0:
 		ci.draw_rect(Rect2(origin, Vector2(W, H)), Color(1, 0.24, 0.08, (mech.heat - 85.0) / 45.0 * 0.35))
+	eject_btn = Rect2()
 	if mech.overload >= 0.0:
-		var r := Rect2(px(W / 2.0 - 90, 30), Vector2(180, 30))
+		var r := Rect2(px(W / 2.0 - 100, 28), Vector2(200, 60))
 		ci.draw_rect(r, Color(0, 0, 0, 0.85))
 		ci.draw_rect(r, Theme2.RED, false, 2.0)
-		Theme2.label(ci, px(W / 2.0, 42), "REACTOR OVERLOAD", Theme2.RED, 8, 1)
-		Theme2.text(ci, px(W / 2.0, 56), "CONTAINMENT IN %.1fs" % maxf(mech.overload, 0.0), Color.WHITE if fmod(t * 4.0, 1.0) < 0.5 else Theme2.RED, 12, 1)
+		Theme2.label(ci, px(W / 2.0 - 30, 42), "REACTOR OVERLOAD", Theme2.RED, 8, 1)
+		Theme2.text(ci, px(W / 2.0 - 30, 56), "CONTAINMENT IN %.1fs" % maxf(mech.overload, 0.0), Color.WHITE if fmod(t * 4.0, 1.0) < 0.5 else Theme2.RED, 12, 1)
+		Theme2.text(ci, px(W / 2.0 - 30, 70), "vent, scram, or get out", Theme2.DIM, 12, 1)
+		eject_btn = Rect2(px(W / 2.0 + 44, 34), Vector2(50, 48))
+		var hot := fmod(t * 3.0, 1.0) < 0.5
+		Theme2.button(ci, eject_btn, "", Theme2.RED, true, hot)
+		Pixel.draw(ci, Sprites.EJECT_SEAT, eject_btn.position + Vector2(13, 3), 1.0, false, Color8(30, 10, 10) if hot else Color.WHITE)
+		Theme2.label(ci, Vector2(eject_btn.get_center().x, eject_btn.end.y - 4), "EJECT", Color8(30, 10, 10) if hot else Theme2.RED, 8, 1)

@@ -61,6 +61,7 @@ func _init() -> void:
 
 
 func _run() -> void:
+	Campaign.clear_saved()
 	var main: Control = load("res://ui/main.tscn").instantiate()
 	root.add_child(main)
 	await process_frame
@@ -74,20 +75,26 @@ func _run() -> void:
 	await tap(to_win.call(Vector2(240, 221)))  # BEGIN OPERATION (bottom of the briefing modal)
 	check(not sim.mission.briefing, "tap dismisses the briefing")
 	# VENT station (4th slot) sets the vent timer
-	await tap(to_win.call(Vector2(444, 3.5 * 36)))
+	await tap(to_win.call(Vector2(444, 3.5 * 42)))
 	await process_frame
 	check(sim.mech.vent_t > 0.0, "tap on VENT station vents (vent_t=%.1f)" % sim.mech.vent_t)
 	# A/C toggle
 	var wf := sim.mech.weapons_free
-	await tap(to_win.call(Vector2(444, 1.5 * 36)))
+	await tap(to_win.call(Vector2(444, 1.5 * 42)))
 	check(sim.mech.weapons_free != wf, "tap on A/C toggles weapons free")
 	# Dragging the feed turns the view
 	var v0 := sim.mech.view
 	await drag(to_win.call(Vector2(300, 100)), to_win.call(Vector2(200, 100)))
 	var turned := Rules.angle_diff(sim.mech.view, v0)
-	check(absf(turned - Rules.CAMERA_FOV * 100.0 / 320.0) < 0.05, "drag of 100px turns the view by %.2f rad" % turned)
+	check(turned > 0.3, "drag of 100px turns the view by %.2f rad" % turned)
+	for i in 60:
+		await process_frame
+	check(Rules.camera_for(sim.mech.view) == 1 and absf(Rules.angle_diff(sim.mech.view, Rules.camera_bearing(1))) < 0.01, "a flick settles on the RIGHT camera")
+	turned = Rules.angle_diff(sim.mech.view, v0)
 	# Tab snaps to the next camera
 	await key(KEY_TAB)
+	for i in 60:
+		await process_frame
 	var snapped := false
 	for cam in Rules.CAMERAS:
 		if absf(Rules.angle_diff(sim.mech.view, Rules.camera_bearing(cam))) < 0.001:
@@ -109,8 +116,16 @@ func _run() -> void:
 	bd.section = Rules.Section.COOLANT
 	sim.boarders.append(bd)
 	await process_frame
-	await tap(to_win.call(Vector2(444, 6.5 * 36)))
+	await tap(to_win.call(Vector2(444, 5.5 * 42)))
 	check(sim.boarders.is_empty() and sim.mech.purge_cd > 0.0, "tap on PURGE fries the boarder")
+	# EJECT lives on the overload banner
+	sim.mech.overload = 5.0
+	sim.mech.heat = 110.0
+	await process_frame
+	await process_frame
+	check(main.cockpit.feed.eject_btn.size.x > 0.0, "overload shows the EJECT button")
+	sim.mech.overload = -1.0
+	sim.mech.heat = 40.0
 	# Pause and resume
 	await tap(to_win.call(Vector2(444, 261)))
 	check(sim.mission.paused, "PAUSE button pauses")

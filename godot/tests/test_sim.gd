@@ -91,5 +91,18 @@ func _init() -> void:
 		bs.step(0.05)
 	check(bs.mech.camera_ok(3), "drones at the sensor head rewire the LEFT camera (%.0f)" % bs.mech.cameras[3])
 
+	print("== campaign save round-trip")
+	var cs := Campaign.new()
+	cs.mission = 3
+	cs.install(Campaign.Part.NAVY_RADIATOR)
+	cs.max_hp[Rules.Section.LEFT_LEG] = 61.0
+	cs.matrix[Rules.Sys.LOCO] = true
+	cs.last_report = {"number": 2, "time": 250.0, "kills": 8, "heat_peak": 90.0, "scars": [[Rules.Section.LEFT_LEG, 9.0]]}
+	cs.roll_salvage(Rng.new(5))
+	var back := Campaign.new()
+	back.from_dict(JSON.parse_string(JSON.stringify(cs.to_dict())))
+	check(back.mission == 3 and back.installed == cs.installed and back.max_hp == cs.max_hp and back.matrix == cs.matrix and back.salvage == cs.salvage, "campaign survives JSON")
+	check(absf(back.cooling_mult - cs.cooling_mult) < 0.001 and back.last_report.scars[0][0] == Rules.Section.LEFT_LEG, "modifiers and report survive JSON")
+
 	print(("ALL PASSED" if failures == 0 else "%d FAILURES" % failures))
 	quit(0 if failures == 0 else 1)

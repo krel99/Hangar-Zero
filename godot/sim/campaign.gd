@@ -192,3 +192,77 @@ func identity() -> String:
 	if o >= 20:
 		return "Something wearing Bastion's skin"
 	return "Unrecognisable. The city calls it 'the Chimera'"
+
+
+# ---------------------------------------------------------------------------------------
+# Persistence: the campaign is saved between operations (user://campaign.json)
+# ---------------------------------------------------------------------------------------
+
+const SAVE_PATH := "user://campaign.json"
+const FIELDS := ["reactor_output", "rail_charge_mult", "rail_heat", "rail_damage_mult", "sensor_range", "cooling_mult",
+	"shield_mult", "repair_mult", "loco_mult", "ac_mult", "hack_mult", "base_heat_mult", "radar_err", "mission",
+	"max_hp", "makers", "installed", "originality", "salvage", "last_report", "cameras", "matrix"]
+
+
+func to_dict() -> Dictionary:
+	var d := {}
+	for f in FIELDS:
+		d[f] = get(f)
+	return d
+
+
+func from_dict(d: Dictionary) -> void:
+	for f in FIELDS:
+		if not d.has(f):
+			continue
+		var v = d[f]
+		match f:
+			"max_hp", "cameras":
+				var a: Array[float] = []
+				for x in v:
+					a.append(float(x))
+				set(f, a)
+			"makers", "installed", "salvage":
+				var a: Array[int] = []
+				for x in v:
+					a.append(int(x))
+				set(f, a)
+			"matrix":
+				var a: Array[bool] = []
+				for x in v:
+					a.append(bool(x))
+				set(f, a)
+			"mission":
+				mission = int(v)
+			"last_report":
+				last_report = v
+				if last_report.has("scars"):
+					var sc: Array = []
+					for pair in last_report.scars:
+						sc.append([int(pair[0]), float(pair[1])])
+					last_report.scars = sc
+			_:
+				set(f, float(v))
+
+
+func save() -> void:
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(to_dict()))
+
+
+static func load_saved() -> Campaign:
+	if not FileAccess.file_exists(SAVE_PATH):
+		return null
+	var text := FileAccess.get_file_as_string(SAVE_PATH)
+	var d = JSON.parse_string(text)
+	if typeof(d) != TYPE_DICTIONARY or not d.has("mission"):
+		return null
+	var c := Campaign.new()
+	c.from_dict(d)
+	return c
+
+
+static func clear_saved() -> void:
+	if FileAccess.file_exists(SAVE_PATH):
+		DirAccess.remove_absolute(SAVE_PATH)

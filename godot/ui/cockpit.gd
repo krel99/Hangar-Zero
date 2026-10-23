@@ -11,7 +11,7 @@ const HULL_ORIGIN := Vector2(4, 92)
 const FEED_POS := Vector2(88, 0)
 const STATION_X := 408.0
 const STATION_W := 72.0
-const STATION_H := 36.0
+const STATION_H := 42.0
 const PAUSE_BTN := Rect2(410, 254, 68, 14)
 const UPLINK_BAR := Rect2(88, 210, 252, 6)
 const RADIO := Rect2(88, 219, 320, 51)
@@ -34,6 +34,13 @@ var gyro_rate := 0.0
 
 var _press := Vector2.ZERO
 var _press_in_feed := false
+## Horizontal drag since the press, in feed pixels (for the flick-to-next-camera gesture).
+var _drag_dx := 0.0
+var _press_cam := 0
+## Seconds since the view was last moved by the player; the view settles onto a whole
+## camera once the hand is still, so the feed is never split between two cameras.
+var _still_t := 10.0
+var _snap := -1.0
 var _dragged := 0.0
 var _down_station := -1
 var _modal_btn := Rect2()
@@ -42,7 +49,7 @@ var _hull_centroid: Array[Vector2] = []
 
 
 func _init() -> void:
-	for i in 7:
+	for i in 6:
 		_station_rects.append(Rect2(STATION_X, i * STATION_H, STATION_W, STATION_H))
 
 
@@ -62,8 +69,28 @@ func modal_open() -> bool:
 # ---------------------------------------------------------------------------------------
 
 func update(dt: float) -> void:
-	if sim.mission.running() and absf(gyro_rate) > 0.02:
-		sim.mech.view = fposmod(sim.mech.view + gyro_rate * dt, TAU)
+	var mech := sim.mech
+	if not sim.mission.running():
+		return
+	if absf(gyro_rate) > 0.02:
+		mech.view = fposmod(mech.view + gyro_rate * dt, TAU)
+		_still_t = 0.0
+		_snap = -1.0
+	elif not _press_in_feed:
+		_still_t += dt
+	if _press_in_feed:
+		return
+	# Settle: a flick picked a camera; otherwise the nearest one after a short pause.
+	var target := _snap
+	if target < 0.0 and _still_t > 0.45:
+		target = Rules.camera_bearing(Rules.camera_for(mech.view))
+	if target >= 0.0:
+		var d := Rules.angle_diff(target, mech.view)
+		if absf(d) < 0.004:
+			mech.view = target
+			_snap = -1.0
+		else:
+			mech.view = fposmod(mech.view + d * minf(dt * 9.0, 1.0), TAU)
 
 
 func draw(ci: CanvasItem, now: float) -> void:
@@ -482,21 +509,19 @@ func _slots() -> Array:
 		purge = ["%d BOARDER%s" % [nb, "S" if nb > 1 else ""], Theme2.PURPLE]
 	else:
 		purge = ["+%d HEAT" % int(Rules.PURGE_HEAT), Theme2.DIM]
-	var overload := mech.overload >= 0.0
 	return [
 		["RAIL", Theme2.CYAN, mech.rail_charge, rail[0], rail[1], rail_ready and lock and mech.scram_t <= 0.0, rail_ready and lock],
 		["A/C", Theme2.YELLOW, 1.0 - fmod(t * 1.5, 1.0) if mech.ac_firing else 1.0, ac[0], ac[1], not ac_dead and c.matrix[Rules.Sys.AC], mech.weapons_free and not ac_dead],
 		["ECM", Theme2.CYAN, 1.0 - mech.ecm_cd / 28.0, "READY" if ecm_ok else ("%ds" % int(mech.ecm_cd) if mech.ecm_cd > 0.0 else "NO SENSORS"), Theme2.GREEN if ecm_ok else Theme2.DIM, ecm_ok, ecm_ok],
 		["VENT", Color8(150, 230, 255), 1.0 - mech.vent_cd / 25.0, "VENTING" if mech.vent_t > 0.0 else ("%ds" % int(mech.vent_cd) if mech.vent_cd > 0.0 else "-20 HEAT/s"), Theme2.GREEN if mech.vent_cd <= 0.0 else Theme2.DIM, mech.vent_cd <= 0.0, mech.vent_t > 0.0],
 		["SCRAM", Theme2.AMBER, 1.0 - mech.scram_cd / 30.0, "DEAD %ds" % int(mech.scram_t) if mech.scram_t > 0.0 else ("%ds" % int(mech.scram_cd) if mech.scram_cd > 0.0 else "KILL BUSES"), Theme2.GREEN if mech.scram_cd <= 0.0 else Theme2.DIM, mech.scram_cd <= 0.0, mech.scram_t > 0.0],
-		["EJECT", Theme2.RED, 1.0 if overload else 0.0, "NOW" if overload else "LOCKED", Theme2.RED if overload else Theme2.DIM, overload, overload and fmod(t * 3.0, 1.0) < 0.5],
 		["PURGE", Theme2.PURPLE, 1.0 - mech.purge_cd / Rules.PURGE_CD, purge[0], purge[1], purge_ok, purge_ok and nb > 0],
 	]
 
 
 func _stations(ci: CanvasItem) -> void:
 	var slots := _slots()
-	for i in 7:
+	for i in 6:
 		var s: Array = slots[i]
 		var r := _station_rects[i]
 		var color: Color = s[1]
@@ -507,11 +532,12 @@ func _stations(ci: CanvasItem) -> void:
 		ci.draw_rect(r, color if lit else (Theme2.dim(color, 0.7) if pressed else Theme2.EDGE_HI), false, 1.0)
 		var tint := Color.WHITE if enabled or lit else Color8(110, 110, 120)
 		var flash := 0.6 if i == 0 and sim.mech.shake > 0.5 else 0.0
-		Pixel.draw(ci, Sprites.HOTBAR[i], r.position + Vector2(2, 2), 1.0, false, tint, flash)
-		Theme2.label(ci, r.position + Vector2(29, 11), s[0], color if enabled or lit else Theme2.DIM, 8)
-		Theme2.seg_bar(ci, Rect2(r.position + Vector2(29, 15), Vector2(34, 5)), s[2], 8, color)
-		Theme2.text(ci, r.position + Vector2(69, 33), s[3], s[4], 12, 2)
-		Theme2.label(ci, r.position + Vector2(69, 11), str(i + 1), Theme2.dim(color, 0.6), 8, 2)
+		Pixel.draw(ci, Sprites.HOTBAR[i], r.position + Vector2(2, 5), 1.0, false, tint, flash)
+		Theme2.label(ci, r.position + Vector2(29, 14), s[0], color if enabled or lit else Theme2.DIM, 8)
+		Theme2.seg_bar(ci, Rect2(r.position + Vector2(29, 19), Vector2(34, 5)), s[2], 8, color)
+		Theme2.text(ci, r.position + Vector2(69, 37), s[3], s[4], 12, 2)
+		if not Theme2.touch:
+			Theme2.label(ci, r.position + Vector2(69, 14), str(i + 1), Theme2.dim(color, 0.6), 8, 2)
 
 
 func _station(i: int) -> void:
@@ -522,10 +548,7 @@ func _station(i: int) -> void:
 		2: sim.cmd_ecm = true
 		3: sim.cmd_vent = true
 		4: sim.cmd_scram = true
-		5:
-			if mech.overload >= 0.0:
-				sim.cmd_eject = true
-		6: sim.cmd_purge = true
+		5: sim.cmd_purge = true
 
 
 # ---------------------------------------------------------------------------------------
@@ -614,7 +637,7 @@ func _modals(ci: CanvasItem) -> void:
 			["drag / gyro", "look around (TAB snaps cameras)"],
 			["tap blip", "select target (T cycles)"],
 			["tap hull", "send repair drones there"],
-			["stations", "rail, a/c, ECM, vent, scram, eject, purge"],
+			["stations", "rail, a/c, ECM, vent, scram, purge"],
 			["SPACE", "fire railgun"],
 		]
 		var y := r.position.y + 40.0
@@ -649,22 +672,36 @@ func press(p: Vector2) -> void:
 	_press_in_feed = false
 	if modal_open():
 		return
-	for i in 7:
+	for i in 6:
 		if _station_rects[i].has_point(p):
 			_down_station = i
 			return
 	_press_in_feed = Rect2(FEED_POS, Vector2(Feed.W, Feed.H)).has_point(p)
+	_drag_dx = 0.0
+	_press_cam = Rules.camera_for(sim.mech.view)
 
 
 func drag(p: Vector2, rel: Vector2) -> void:
 	_dragged += rel.length()
 	if _press_in_feed and sim.mission.running():
+		_drag_dx += rel.x
+		_snap = -1.0
+		_still_t = 0.0
 		sim.mech.view = fposmod(sim.mech.view - rel.x / Feed.W * Rules.CAMERA_FOV, TAU)
 
 
 func release(p: Vector2) -> void:
 	var station := _down_station
 	_down_station = -1
+	if _press_in_feed:
+		_press_in_feed = false
+		if absf(_drag_dx) > 24.0:
+			# A flick moves to the next camera in that direction even if the drag was short.
+			var cam := Rules.camera_for(sim.mech.view)
+			if cam == _press_cam:
+				cam = (cam + (1 if _drag_dx < 0.0 else -1) + Rules.CAMERAS) % Rules.CAMERAS
+			_snap = Rules.camera_bearing(cam)
+			return
 	if modal_open():
 		_modal_tap(p)
 		return
@@ -684,6 +721,8 @@ func release(p: Vector2) -> void:
 		var s := hull_section_at(p)
 		if s >= 0:
 			mech.repair_target = s
+	elif feed.eject_btn.has_point(p):
+		sim.cmd_eject = true
 	elif Rect2(FEED_POS, Vector2(Feed.W, Feed.H)).has_point(p):
 		_pick_in_feed(p)
 
@@ -743,7 +782,8 @@ func cycle_target() -> void:
 func turn_camera(step: int) -> void:
 	var mech := sim.mech
 	var cam := (Rules.camera_for(mech.view) + step + Rules.CAMERAS) % Rules.CAMERAS
-	mech.view = Rules.camera_bearing(cam)
+	_snap = Rules.camera_bearing(cam)
+	_still_t = 0.0
 
 
 func key(keycode: int, shift: bool) -> void:
@@ -765,7 +805,10 @@ func key(keycode: int, shift: bool) -> void:
 		KEY_TAB: turn_camera(-1 if shift else 1)
 		KEY_LEFT: turn_camera(-1)
 		KEY_RIGHT: turn_camera(1)
-		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6:
 			var i := keycode - KEY_1
 			if _slots()[i][5]:
 				_station(i)
+		KEY_BACKSPACE:
+			if sim.mech.overload >= 0.0:
+				sim.cmd_eject = true
