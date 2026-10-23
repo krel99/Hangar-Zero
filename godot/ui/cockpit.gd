@@ -44,13 +44,157 @@ var _snap := -1.0
 var _dragged := 0.0
 var _down_station := -1
 var _modal_btn := Rect2()
+var _gyro_btn := Rect2()
 var _station_rects: Array[Rect2] = []
 var _hull_centroid: Array[Vector2] = []
+## The hull body is baked into a small image a dozen times a second instead of ~4000
+## rect draws per frame; the overlays (drone outline, ticks, shells) stay live.
+const HULL_PAD := 2
+var _hull_img := Image.create(Hull.W + HULL_PAD * 2, Hull.H + HULL_PAD * 2, false, Image.FORMAT_RGBA8)
+var _hull_tex: ImageTexture
+var _hull_next := -1.0
+## Static per-cell data: halo distance (0 none, 1, 2) over the padded grid, edge/hi flags.
+var _halo := PackedByteArray()
+var _edge := PackedByteArray()
+var _hi := PackedByteArray()
+var _last_shake := 0.0
+var _last_kills := 0
+var _last_overload := false
+## Settings (persisted in user://settings.cfg).
+static var gyro_enabled := true
 
 
 func _init() -> void:
 	for i in 6:
 		_station_rects.append(Rect2(STATION_X, i * STATION_H, STATION_W, STATION_H))
+	_hull_static()
+	_hull_tex = ImageTexture.create_from_image(_hull_img)
+	load_settings()
+
+
+static func load_settings() -> void:
+	var cf := ConfigFile.new()
+	if cf.load("user://settings.cfg") == OK:
+		gyro_enabled = cf.get_value("input", "gyro", true)
+
+
+static func save_settings() -> void:
+	var cf := ConfigFile.new()
+	cf.set_value("input", "gyro", gyro_enabled)
+	cf.save("user://settings.cfg")
+
+
+func _hull_static() -> void:
+	var pw := Hull.W + HULL_PAD * 2
+	var ph := Hull.H + HULL_PAD * 2
+	_halo.resize(pw * ph)
+	_halo.fill(0)
+	for py in ph:
+		for px in pw:
+			var x := px - HULL_PAD
+			var y := py - HULL_PAD
+			if Hull.at(x, y) != Hull.EMPTY:
+				continue
+			var best := 3
+			for dy in range(-2, 3):
+				for dx in range(-2, 3):
+					if Hull.at(x + dx, y + dy) != Hull.EMPTY:
+						best = mini(best, maxi(absi(dx), absi(dy)))
+			if best <= 2:
+				_halo[py * pw + px] = best
+	_edge.resize(Hull.W * Hull.H)
+	_hi.resize(Hull.W * Hull.H)
+	var cen_sum: Array = []
+	var cen_n: Array = []
+	for sec in Rules.SECTIONS:
+		cen_sum.append(Vector2.ZERO)
+		cen_n.append(0)
+	for y in Hull.H:
+		for x in Hull.W:
+			var v := Hull.at(x, y)
+			if v == Hull.EMPTY:
+				continue
+			_edge[y * Hull.W + x] = 1 if (Hull.at(x - 1, y) != v or Hull.at(x + 1, y) != v or Hull.at(x, y - 1) != v or Hull.at(x, y + 1) != v) else 0
+			_hi[y * Hull.W + x] = 1 if (Hull.at(x, y - 1) != v or Hull.at(x - 1, y) != v) else 0
+			if v < Rules.SECTIONS:
+				cen_sum[v] += Vector2(x, y)
+				cen_n[v] += 1
+	_hull_centroid.clear()
+	for sec in Rules.SECTIONS:
+		var n: int = maxi(cen_n[sec], 1)
+		_hull_centroid.append(HULL_ORIGIN + (cen_sum[sec] / n + Vector2(0.5, 0.5)) * HULL_K)
+
+
+func _hull_bake(boarders_on: Array) -> void:
+	var mech := sim.mech
+	var st: Dictionary = mech.st
+	var img := _hull_img
+	img.fill(Color(0, 0, 0, 0))
+	var pw := Hull.W + HULL_PAD * 2
+	var sfrac: float = clampf(mech.shield / st.shield_cap, 0.0, 1.0) if st.shield_cap > 0.0 else 0.0
+	var down := mech.shields_down_t > 0.0
+	if sfrac > 0.02 or down:
+		var halo := Theme2.RED if down else Theme2.SHIELD
+		var blink := fmod(t * 8.0, 1.0) < 0.5
+		for i in _halo.size():
+			var best := _halo[i]
+			if best == 0:
+				continue
+			var px := i % pw
+			var py := i / pw
+			var shimmer := sin((px + py) * 0.7 + t * 6.0) * 0.5 + 0.5
+			var base := 0.7 if best == 1 else 0.3
+			var a: float = (0.4 if blink else 0.0) if down else base * (0.4 + 0.6 * sfrac) * (0.7 + 0.3 * shimmer)
+			if a > 0.0:
+				img.set_pixel(px, py, Color(halo, a * 0.6))
+	var scan_y := int(fmod(t * 0.35, 1.0) * (Hull.H + 6)) - 3
+	var dead_blink := fmod(t * 2.0, 1.0) < 0.5
+	var purple := (sin(t * 3.0) * 0.5 + 0.5) * 0.6
+	for y in Hull.H:
+		for x in Hull.W:
+			var v := Hull.at(x, y)
+			if v == Hull.EMPTY:
+				continue
+			if Hull.at(x + 1, y + 1) == Hull.EMPTY:
+				img.set_pixel(x + 1 + HULL_PAD, y + 1 + HULL_PAD, Color(0, 0, 0, 0.47))
+	for y in Hull.H:
+		for x in Hull.W:
+			var v := Hull.at(x, y)
+			if v == Hull.EMPTY:
+				continue
+			var col: Color
+			if v == Hull.FRAME:
+				col = Color8(54, 60, 68)
+			else:
+				var f: float = mech.uplink() / 100.0 if v == Rules.Section.UPLINK else mech.frac(v)
+				if v == Rules.Section.UPLINK:
+					col = Theme2.CYAN if y / 7.0 > 1.0 - f else Color8(30, 60, 70)
+				else:
+					col = Hull.health_color(f)
+				if f <= 0.0 and v != Rules.Section.UPLINK and dead_blink:
+					col = Color8(20, 10, 10)
+				if v != Rules.Section.UPLINK and f < 0.6 and Rng.hash2(x, y, 4) % 7 == 0:
+					col = Theme2.dim(col, 0.4)
+				if boarders_on[v] > 0:
+					col = col.lerp(Theme2.PURPLE, purple)
+				var flash: float = mech.hit_t[v]
+				if flash > 0.0:
+					col = col.lerp(Color8(255, 240, 200), flash * flash)
+			var d := Hull.detail_at(x, y)
+			var i := y * Hull.W + x
+			if d == Hull.D.HAZARD:
+				col = Color8(24, 22, 20) if Hull.hazard_dark(x, y) else Hull.shade(col, d, t)
+			elif d != Hull.D.NONE:
+				col = Hull.shade(col, d, t)
+			elif _edge[i] == 1:
+				col = Theme2.dim(col, 1.15) if _hi[i] == 1 else Theme2.dim(col, 0.45)
+			else:
+				col = Theme2.dim(col, 0.78)
+			if y == scan_y:
+				col = Theme2.dim(col, 1.6)
+			col.a = 1.0
+			img.set_pixel(x + HULL_PAD, y + HULL_PAD, col)
+	_hull_tex.update(img)
 
 
 func set_sim(s: Sim) -> void:
@@ -70,9 +214,10 @@ func modal_open() -> bool:
 
 func update(dt: float) -> void:
 	var mech := sim.mech
+	_haptics(mech)
 	if not sim.mission.running():
 		return
-	if absf(gyro_rate) > 0.02:
+	if gyro_enabled and absf(gyro_rate) > 0.02:
 		mech.view = fposmod(mech.view + gyro_rate * dt, TAU)
 		_still_t = 0.0
 		_snap = -1.0
@@ -91,6 +236,21 @@ func update(dt: float) -> void:
 			_snap = -1.0
 		else:
 			mech.view = fposmod(mech.view + d * minf(dt * 9.0, 1.0), TAU)
+
+
+## Short buzzes for the things the pilot would feel: a rail shot, a shell, a kill, the
+## overload alarm. No-op without a vibrator.
+func _haptics(mech: Mech) -> void:
+	if mech.shake > _last_shake + 0.3:
+		Input.vibrate_handheld(70 if mech.shake > 1.2 else 30)
+	_last_shake = mech.shake
+	if mech.kills > _last_kills:
+		Input.vibrate_handheld(20)
+	_last_kills = mech.kills
+	var overload := mech.overload >= 0.0
+	if overload and not _last_overload:
+		Input.vibrate_handheld(200)
+	_last_overload = overload
 
 
 func draw(ci: CanvasItem, now: float) -> void:
@@ -264,90 +424,21 @@ func _hull(ci: CanvasItem) -> void:
 		gy += 8.0
 	var sfrac: float = clampf(mech.shield / st.shield_cap, 0.0, 1.0) if st.shield_cap > 0.0 else 0.0
 	var down := mech.shields_down_t > 0.0
-	# Shield halo
-	if sfrac > 0.02 or down:
-		var halo := Theme2.RED if down else Theme2.SHIELD
-		for y in range(-2, Hull.H + 2):
-			for x in range(-2, Hull.W + 2):
-				if Hull.at(x, y) != Hull.EMPTY:
-					continue
-				var best := 3
-				for dy in range(-2, 3):
-					for dx in range(-2, 3):
-						if Hull.at(x + dx, y + dy) != Hull.EMPTY:
-							best = mini(best, maxi(absi(dx), absi(dy)))
-				if best <= 2:
-					var shimmer := sin((x + y) * 0.7 + t * 6.0) * 0.5 + 0.5
-					var base := 0.7 if best == 1 else 0.3
-					var a: float = (0.4 if fmod(t * 8.0, 1.0) < 0.5 else 0.0) if down else base * (0.4 + 0.6 * sfrac) * (0.7 + 0.3 * shimmer)
-					if a > 0.0:
-						ci.draw_rect(_cell(x, y), Color(halo, a * 0.6))
-	# Drop shadow
-	for y in Hull.H:
-		for x in Hull.W:
-			if Hull.at(x, y) != Hull.EMPTY and Hull.at(x + 1, y + 1) == Hull.EMPTY:
-				ci.draw_rect(_cell(x + 1, y + 1), Color(0, 0, 0, 0.47))
-	var scan_y := int(fmod(t * 0.35, 1.0) * (Hull.H + 6)) - 3
-	var cen_sum: Array = []
-	var cen_n: Array = []
-	for s in Rules.SECTIONS:
-		cen_sum.append(Vector2.ZERO)
-		cen_n.append(0)
 	var boarders_on: Array = []
 	boarders_on.resize(Rules.SECTIONS)
 	boarders_on.fill(0)
 	for b in sim.boarders:
 		boarders_on[b.section] += 1
-	for y in Hull.H:
-		for x in Hull.W:
-			var v := Hull.at(x, y)
-			if v == Hull.EMPTY:
-				continue
-			var edge := Hull.at(x - 1, y) != v or Hull.at(x + 1, y) != v or Hull.at(x, y - 1) != v or Hull.at(x, y + 1) != v
-			var hi := Hull.at(x, y - 1) != v or Hull.at(x - 1, y) != v
-			var col: Color
-			if v == Hull.FRAME:
-				col = Color8(54, 60, 68)
-			else:
-				cen_sum[v] += Vector2(x, y)
-				cen_n[v] += 1
-				var f: float = mech.uplink() / 100.0 if v == Rules.Section.UPLINK else mech.frac(v)
-				if v == Rules.Section.UPLINK:
-					col = Theme2.CYAN if y / 7.0 > 1.0 - f else Color8(30, 60, 70)
-				else:
-					col = Hull.health_color(f)
-				if f <= 0.0 and v != Rules.Section.UPLINK and fmod(t * 2.0, 1.0) < 0.5:
-					col = Color8(20, 10, 10)
-				if v != Rules.Section.UPLINK and f < 0.6 and Rng.hash2(x, y, 4) % 7 == 0:
-					col = Theme2.dim(col, 0.4)
-				if boarders_on[v] > 0:
-					col = col.lerp(Theme2.PURPLE, (sin(t * 3.0) * 0.5 + 0.5) * 0.6)
-				var flash: float = mech.hit_t[v]
-				if flash > 0.0:
-					col = col.lerp(Color8(255, 240, 200), flash * flash)
-			var d := Hull.detail_at(x, y)
-			if d == Hull.D.HAZARD:
-				col = Color8(24, 22, 20) if Hull.hazard_dark(x, y) else Hull.shade(col, d, t)
-			elif d != Hull.D.NONE:
-				col = Hull.shade(col, d, t)
-			elif edge:
-				col = Theme2.dim(col, 1.15) if hi else Theme2.dim(col, 0.45)
-			else:
-				col = Theme2.dim(col, 0.78)
-			if y == scan_y:
-				col = Theme2.dim(col, 1.6)
-			ci.draw_rect(_cell(x, y), col)
-	_hull_centroid.clear()
-	for s in Rules.SECTIONS:
-		var n: int = maxi(cen_n[s], 1)
-		_hull_centroid.append(HULL_ORIGIN + (cen_sum[s] / n + Vector2(0.5, 0.5)) * HULL_K)
+	if t >= _hull_next or mech.hit_t.max() > 0.9:
+		_hull_bake(boarders_on)
+		_hull_next = t + 0.08
+	ci.draw_texture_rect(_hull_tex, Rect2(HULL_ORIGIN - Vector2(HULL_PAD, HULL_PAD) * HULL_K, Vector2(_hull_img.get_width(), _hull_img.get_height()) * HULL_K), false)
 	# Repair drones: blinking outline on their target
 	var rt := mech.repair_target
 	if fmod(t * 2.0, 1.0) < 0.6:
 		for y in Hull.H:
 			for x in Hull.W:
-				var v := Hull.at(x, y)
-				if v == rt and (Hull.at(x - 1, y) != v or Hull.at(x + 1, y) != v or Hull.at(x, y - 1) != v or Hull.at(x, y + 1) != v):
+				if Hull.at(x, y) == rt and _edge[y * Hull.W + x] == 1:
 					ci.draw_rect(_cell(x, y), Color8(240, 130, 60), false, 1.0)
 	# Boarders and incoming shells
 	for s in Rules.SECTIONS:
@@ -568,6 +659,7 @@ func _modals(ci: CanvasItem) -> void:
 	var mission := sim.mission
 	var mech := sim.mech
 	_modal_btn = Rect2()
+	_gyro_btn = Rect2()
 	if mission.briefing:
 		var r := _modal_frame(ci, Vector2(440, 200), Theme2.AMBER)
 		Theme2.label(ci, r.position + Vector2(10, 16), "OPERATION %02d // BRIEFING" % mission.number, Theme2.AMBER, 8)
@@ -631,28 +723,43 @@ func _modals(ci: CanvasItem) -> void:
 		Theme2.button(ci, _modal_btn, "RETURN TO HANGAR" if victory else "NEW CAMPAIGN", col, true, true)
 		return
 	if mission.paused:
-		var r := _modal_frame(ci, Vector2(300, 160), Theme2.DIM)
+		var r := _modal_frame(ci, Vector2(300, 170), Theme2.DIM)
 		Theme2.label(ci, Vector2(r.get_center().x, r.position.y + 18), "PAUSED", Theme2.AMBER, 12, 1)
-		var help := [
-			["drag / gyro", "look around (TAB snaps cameras)"],
-			["tap blip", "select target (T cycles)"],
-			["tap hull", "send repair drones there"],
-			["stations", "rail, a/c, ECM, vent, scram, purge"],
-			["SPACE", "fire railgun"],
-		]
-		var y := r.position.y + 40.0
+		var help: Array
+		if Theme2.touch:
+			help = [
+				["swipe", "look around; flick for the next camera"],
+				["tap blip", "select target; tap it again to fire"],
+				["tap hull", "send repair drones there"],
+				["stations", "rail, a/c, ECM, vent, scram, purge"],
+			]
+		else:
+			help = [
+				["drag / gyro", "look around (TAB snaps cameras)"],
+				["tap blip", "select target (T cycles)"],
+				["tap hull", "send repair drones there"],
+				["1-6", "rail, a/c, ECM, vent, scram, purge"],
+				["SPACE", "fire railgun"],
+			]
+		var y := r.position.y + 38.0
 		for h in help:
 			Theme2.text(ci, Vector2(r.position.x + 70, y), h[0], Theme2.AMBER, 12, 2)
 			Theme2.text(ci, Vector2(r.position.x + 78, y), h[1], Theme2.TEXT, 12)
 			y += 14.0
-		_modal_btn = Rect2(r.get_center().x - 40, r.end.y - 24, 80, 16)
+		_gyro_btn = Rect2(r.position.x + 16, r.end.y - 26, 96, 18)
+		Theme2.button(ci, _gyro_btn, "GYRO %s" % ("ON" if gyro_enabled else "OFF"), Theme2.CYAN, true, gyro_enabled)
+		_modal_btn = Rect2(r.end.x - 112, r.end.y - 26, 96, 18)
 		Theme2.button(ci, _modal_btn, "RESUME", Theme2.AMBER, true, true)
 
 
 func _modal_tap(p: Vector2) -> void:
+	var mission := sim.mission
+	if mission.paused and _gyro_btn.has_point(p):
+		gyro_enabled = not gyro_enabled
+		save_settings()
+		return
 	if not _modal_btn.has_point(p):
 		return
-	var mission := sim.mission
 	if mission.briefing:
 		mission.briefing = false
 	elif mission.outcome != Rules.Outcome.NONE:
@@ -732,7 +839,7 @@ func _pick_blip(p: Vector2) -> void:
 	var c := Vector2(44, 44)
 	var k := 35.0 / Rules.RADAR_SCALE_M
 	var best := -1
-	var best_d := 10.0
+	var best_d := 14.0
 	for e in sim.enemies:
 		if e.dist > mech.st.radar_range:
 			continue
@@ -743,6 +850,9 @@ func _pick_blip(p: Vector2) -> void:
 			best = e.id
 	if best >= 0:
 		mech.target = best
+	else:
+		# A tap on empty scope cycles through what the radar can see.
+		cycle_target()
 
 
 func _pick_in_feed(p: Vector2) -> void:
